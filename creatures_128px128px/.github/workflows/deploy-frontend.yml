@@ -1,0 +1,196 @@
+name: Deploy frontend
+
+on:
+  repository_dispatch:
+    types:
+      - frontend-updated
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Completed app CI workflow run ID"
+        required: true
+        type: string
+      artifact_name:
+        description: "Frontend artifact name from app CI"
+        required: true
+        type: string
+      allow_rollback:
+        description: "Allow deploying an older successful app artifact"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: creatura-frontend-production
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+
+jobs:
+  deploy:
+    name: Publish frontend
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      APP_RUN_ID: ${{ github.event.client_payload.run_id || inputs.run_id }}
+      APP_ARTIFACT_NAME: ${{ github.event.client_payload.artifact_name || inputs.artifact_name }}
+      ALLOW_ROLLBACK: ${{ inputs.allow_rollback || false }}
+
+    defaults:
+      run:
+        working-directory: infra
+
+    steps:
+      - name: Checkout infrastructure
+        uses: actions/checkout@v4
+
+      - name: Verify source app workflow
+        env:
+          GH_TOKEN: ${{ secrets.APP_REPO_TOKEN }}
+          APP_REPOSITORY: ${{ vars.APP_REPOSITORY }}
+          APP_PRODUCTION_BRANCH: ${{ vars.APP_PRODUCTION_BRANCH || 'main' }}
+          APP_WORKFLOW_ID: ${{ vars.APP_WORKFLOW_ID }}
+        run: |
+          [[ "$APP_RUN_ID" =~ ^[0-9]+$ ]]
+          test -n "$APP_ARTIFACT_NAME"
+          run_json=$(gh api "repos/${APP_REPOSITORY}/actions/runs/${APP_RUN_ID}")
+          test "$(jq -r '.status' <<< "$run_json")" = "completed"
+          test "$(jq -r '.conclusion' <<< "$run_json")" = "success"
+          test "$(jq -r '.head_repository.full_name' <<< "$run_json")" = "$APP_REPOSITORY"
+          test "$(jq -r '.head_branch' <<< "$run_json")" = "$APP_PRODUCTION_BRANCH"
+          if test -n "$APP_WORKFLOW_ID"; then
+            test "$(jq -r '.workflow_id | tostring' <<< "$run_json")" = "$APP_WORKFLOW_ID"
+          fi
+          artifacts_json=$(gh api "repos/${APP_REPOSITORY}/actions/runs/${APP_RUN_ID}/artifacts")
+          artifact=$(jq -e --arg name "$APP_ARTIFACT_NAME" '.artifacts[] | select(.name == $name and .expired == false and .size_in_bytes > 0)' <<< "$artifacts_json")
+          test -n "$artifact"
+
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.APP_ARTIFACT_NAME }}
+          repository: ${{ vars.APP_REPOSITORY }}
+          run-id: ${{ github.event.client_payload.run_id || inputs.run_id }}
+          github-token: ${{ secrets.APP_REPO_TOKEN }}
+          path: frontend-dist
+
+      - name: Verify frontend build
+        run: |
+          test -d ../frontend-dist
+          test -f ../frontend-dist/index.html
+          test -n "$(find ../frontend-dist -type f -print -quit)"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_FRONTEND_ROLE_ARN }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.0
+
+      - name: Read deployment targets from Terraform state
+        run: >-
+          terraform init -input=false
+          -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          -backend-config="key=${{ vars.TF_STATE_KEY }}"
+          -backend-config="region=${{ vars.TF_STATE_REGION }}"
+          -backend-config="encrypt=true"
+          -backend-config="use_lockfile=true"
+
+      - name: Export deployment targets
+        run: |
+          echo "BUCKET_NAME=$(terraform output -raw bucket_name)" >> "$GITHUB_ENV"
+          echo "DISTRIBUTION_ID=$(terraform output -raw cloudfront_distribution_id)" >> "$GITHUB_ENV"
+          echo "CDN_DOMAIN=$(terraform output -raw cloudfront_domain_name)" >> "$GITHUB_ENV"
+
+      - name: Record Terraform state checksum
+        run: terraform state pull | sha256sum > /tmp/terraform-state-before.sha256
+
+      - name: Reject stale frontend release
+        run: |
+          [[ "$APP_RUN_ID" =~ ^[0-9]+$ ]]
+          current_release=$(aws s3 cp "s3://${BUCKET_NAME}/.creatura/frontend-release.json" - 2>/dev/null || true)
+          current_run_id=0
+          if [ -n "$current_release" ]; then
+            current_run_id=$(printf '%s' "$current_release" | jq -r '.run_id // 0')
+          fi
+          if test "$ALLOW_ROLLBACK" != "true" && test "$APP_RUN_ID" -lt "$current_run_id"; then
+            echo "Release ${APP_RUN_ID} is older than deployed release ${current_run_id}."
+            exit 1
+          fi
+
+      - name: Publish frontend to S3
+        run: |
+          aws s3 sync ../frontend-dist "s3://${BUCKET_NAME}" \
+            --exclude "sprites/*" \
+            --exclude "index.html" \
+            --exclude ".creatura/*" \
+            --cache-control "public, max-age=31536000, immutable"
+          aws s3 cp ../frontend-dist/index.html "s3://${BUCKET_NAME}/index.html" \
+            --content-type "text/html; charset=utf-8" \
+            --cache-control "no-cache, no-store, must-revalidate" \
+            --metadata-directive REPLACE
+
+      - name: Invalidate CloudFront cache
+        run: |
+          invalidation_id=$(aws cloudfront create-invalidation \
+            --distribution-id "${DISTRIBUTION_ID}" \
+            --paths "/*" \
+            --query 'Invalidation.Id' \
+            --output text)
+          echo "INVALIDATION_ID=${invalidation_id}" >> "$GITHUB_ENV"
+
+      - name: Wait for CloudFront invalidation
+        run: aws cloudfront wait invalidation-completed --distribution-id "${DISTRIBUTION_ID}" --id "${INVALIDATION_ID}"
+
+      - name: Verify Terraform state unchanged
+        run: |
+          terraform state pull | sha256sum > /tmp/terraform-state-after.sha256
+          cmp /tmp/terraform-state-before.sha256 /tmp/terraform-state-after.sha256
+
+      - name: Verify public frontend and sprite
+        run: |
+          root_headers=$(curl --fail --silent --show-error --head "https://${CDN_DOMAIN}/")
+          echo "$root_headers"
+          echo "$root_headers" | grep -iq "^content-type: text/html"
+          echo "$root_headers" | grep -Eiq "^cache-control:.*(no-cache|no-store|max-age=0)"
+
+          sprite_name=$(find ../images -maxdepth 1 -type f -name '*.png' -printf '%f\n' | sort | head -n 1)
+          test -n "$sprite_name"
+          sprite_headers=$(curl --fail --silent --show-error --head "https://${CDN_DOMAIN}/sprites/${sprite_name}")
+          echo "$sprite_headers"
+          echo "$sprite_headers" | grep -iq "^content-type: image/png"
+          echo "$sprite_headers" | grep -Eiq "^cache-control:.*max-age=31536000"
+          echo "$sprite_headers" | grep -iq "immutable"
+
+      - name: Verify frontend asset headers
+        run: |
+          asset_path=$(curl --fail --silent --show-error "https://${CDN_DOMAIN}/" | grep -oE '(src|href)="[^"]+\.(js|css)(\?[^" ]*)?"' | head -n 1 | cut -d'"' -f2)
+          test -n "$asset_path"
+          asset_path="${asset_path#./}"
+          asset_path="${asset_path#/}"
+          asset_headers=$(curl --fail --silent --show-error --head "https://${CDN_DOMAIN}/${asset_path}")
+          echo "$asset_headers"
+          echo "$asset_headers" | grep -Eiq "^content-type: (application/javascript|text/javascript|text/css)"
+          echo "$asset_headers" | grep -Eiq "^cache-control:.*max-age=31536000"
+          echo "$asset_headers" | grep -iq "immutable"
+
+      - name: Mark release successful
+        run: |
+          jq -n \
+            --arg run_id "$APP_RUN_ID" \
+            --arg artifact "$APP_ARTIFACT_NAME" \
+            '{run_id: ($run_id | tonumber), artifact: $artifact}' > /tmp/frontend-release.json
+          aws s3 cp /tmp/frontend-release.json "s3://${BUCKET_NAME}/.creatura/frontend-release.json" \
+            --content-type "application/json" \
+            --cache-control "no-cache, no-store, must-revalidate" \
+            --metadata-directive REPLACE
