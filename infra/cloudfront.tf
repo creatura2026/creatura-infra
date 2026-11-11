@@ -1,31 +1,29 @@
+locals {
+  s3_origin_id = "s3-${aws_s3_bucket.sprites.id}"
+
+  # AWS managed cache policies. Referencing them by ID needs no extra IAM permission.
+  cache_policy_caching_optimized = "658327ea-f89d-4fab-a63d-7e88639e58f6"
+  cache_policy_caching_disabled  = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+
+  # Paths whose file names are content-hashed (or never change) and can be cached for a long time.
+  # admin/assets/* is the dashboard, built with the /admin/ base path.
+  long_lived_path_patterns = ["assets/*", "admin/assets/*", "sprites/*"]
+}
+
 resource "aws_cloudfront_origin_access_control" "sprites" {
   name                              = "${aws_s3_bucket.sprites.bucket}-oac"
-  description                       = "CloudFront access to the private sprite bucket"
+  description                       = "CloudFront access to the private Creatura bucket"
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
   signing_protocol                  = "sigv4"
 }
 
-resource "aws_cloudfront_cache_policy" "html" {
-  name        = "creatura-html-no-cache"
-  comment     = "Always revalidate the frontend entry point"
-  default_ttl = 0
-  max_ttl     = 0
-  min_ttl     = 0
-
-  parameters_in_cache_key_and_forwarded_to_origin {
-    cookies_config {
-      cookie_behavior = "none"
-    }
-
-    headers_config {
-      header_behavior = "none"
-    }
-
-    query_strings_config {
-      query_string_behavior = "none"
-    }
-  }
+resource "aws_cloudfront_function" "spa_rewrite" {
+  name    = "creatura-spa-rewrite"
+  runtime = "cloudfront-js-2.0"
+  comment = "Serve index.html for client-side routes of the player PWA and the admin dashboard"
+  publish = true
+  code    = file("${path.module}/functions/spa-rewrite.js")
 }
 
 resource "aws_cloudfront_distribution" "sprites" {
@@ -33,41 +31,42 @@ resource "aws_cloudfront_distribution" "sprites" {
   is_ipv6_enabled     = true
   default_root_object = "index.html"
   price_class         = var.cloudfront_price_class
-  comment             = "Creature sprites CDN"
+  comment             = "Creatura web apps (player PWA, admin dashboard) and sprites"
 
   origin {
     domain_name              = aws_s3_bucket.sprites.bucket_regional_domain_name
-    origin_id                = "s3-${aws_s3_bucket.sprites.id}"
+    origin_id                = local.s3_origin_id
     origin_access_control_id = aws_cloudfront_origin_access_control.sprites.id
   }
 
-  ordered_cache_behavior {
-    path_pattern           = "assets/*"
-    target_origin_id       = "s3-${aws_s3_bucket.sprites.id}"
-    viewer_protocol_policy = "redirect-to-https"
-    allowed_methods        = ["GET", "HEAD"]
-    cached_methods         = ["GET", "HEAD"]
-    compress               = true
-    cache_policy_id        = "658327ea-f89d-4fab-a63d-7e88639e58f6"
+  dynamic "ordered_cache_behavior" {
+    for_each = local.long_lived_path_patterns
+
+    content {
+      path_pattern           = ordered_cache_behavior.value
+      target_origin_id       = local.s3_origin_id
+      viewer_protocol_policy = "redirect-to-https"
+      allowed_methods        = ["GET", "HEAD"]
+      cached_methods         = ["GET", "HEAD"]
+      compress               = true
+      cache_policy_id        = local.cache_policy_caching_optimized
+    }
   }
 
-  ordered_cache_behavior {
-    path_pattern           = "sprites/*"
-    target_origin_id       = "s3-${aws_s3_bucket.sprites.id}"
-    viewer_protocol_policy = "redirect-to-https"
-    allowed_methods        = ["GET", "HEAD"]
-    cached_methods         = ["GET", "HEAD"]
-    compress               = true
-    cache_policy_id        = "658327ea-f89d-4fab-a63d-7e88639e58f6"
-  }
-
+  # Everything else: index.html of both apps, service worker, web manifest, icons.
+  # Never cached at the edge, so a new release is visible immediately.
   default_cache_behavior {
-    target_origin_id       = "s3-${aws_s3_bucket.sprites.id}"
+    target_origin_id       = local.s3_origin_id
     viewer_protocol_policy = "redirect-to-https"
     allowed_methods        = ["GET", "HEAD"]
     cached_methods         = ["GET", "HEAD"]
     compress               = true
-    cache_policy_id        = aws_cloudfront_cache_policy.html.id
+    cache_policy_id        = local.cache_policy_caching_disabled
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.spa_rewrite.arn
+    }
   }
 
   restrictions {

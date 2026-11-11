@@ -130,15 +130,31 @@ jobs:
 
       - name: Publish frontend to S3
         run: |
+          # Expected artifact layout: player PWA at the root, admin dashboard under admin/.
+          # Hashed files first, cached for one year.
           aws s3 sync ../frontend-dist "s3://${BUCKET_NAME}" \
-            --exclude "sprites/*" \
-            --exclude "index.html" \
-            --exclude ".creatura/*" \
+            --exclude "*" \
+            --include "assets/*" \
+            --include "admin/assets/*" \
             --cache-control "public, max-age=31536000, immutable"
-          aws s3 cp ../frontend-dist/index.html "s3://${BUCKET_NAME}/index.html" \
-            --content-type "text/html; charset=utf-8" \
-            --cache-control "no-cache, no-store, must-revalidate" \
-            --metadata-directive REPLACE
+          # Unhashed files (service worker, web manifest, icons) must be revalidated.
+          aws s3 sync ../frontend-dist "s3://${BUCKET_NAME}" \
+            --exclude "assets/*" \
+            --exclude "admin/assets/*" \
+            --exclude "sprites/*" \
+            --exclude ".creatura/*" \
+            --exclude "index.html" \
+            --exclude "admin/index.html" \
+            --cache-control "no-cache"
+          # Entry points last.
+          for page in admin/index.html index.html; do
+            if test -f "../frontend-dist/${page}"; then
+              aws s3 cp "../frontend-dist/${page}" "s3://${BUCKET_NAME}/${page}" \
+                --content-type "text/html; charset=utf-8" \
+                --cache-control "no-cache, no-store, must-revalidate" \
+                --metadata-directive REPLACE
+            fi
+          done
 
       - name: Invalidate CloudFront cache
         run: |

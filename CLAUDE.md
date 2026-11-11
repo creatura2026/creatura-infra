@@ -4,116 +4,64 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repo Does
 
-Infrastructure-only repository for Creatura: a static frontend served through AWS CloudFront. The application source code lives in a separate app repository. This repo owns all Terraform, IAM roles, GitHub Actions workflows, and the sprite image assets.
+Infrastructure repository for Creatura: two static web apps (player PWA and admin dashboard) served through AWS CloudFront from a private S3 bucket. The application source lives in the separate `creatura-app` repository (pnpm monorepo, `apps/player` and `apps/admin`). This repo owns the Terraform, the GitHub Actions workflows, the deploy script, and the sprite images.
 
-Target AWS region: `eu-west-3` (Paris).
+## AWS Constraints (verified 2026-11-11)
+
+- **Region: `eu-north-1`.** The organization SCP `p-0vevikxq` explicitly denies `eu-west-1` and `eu-west-3`. `us-east-1` is allowed, which CloudFront (a global service) needs.
+- **No IAM.** Team members use IAM users with static access keys and cannot read or create IAM resources. The stacks therefore create no role, policy or OIDC provider, and CI authenticates with static keys stored as GitHub secrets.
+- **CloudFront needs explicit permissions.** An IAM user that only has S3 rights gets `AccessDenied ... no identity-based policy allows the cloudfront:...`. That is a missing IAM policy on the user, not the SCP. `CloudFrontFullAccess` is enough.
 
 ## Two Terraform Stacks
 
-### `bootstrap/` — run once by an admin
+### `bootstrap/` — run once
 
-Creates the remote state S3 bucket, GitHub OIDC provider, and three IAM roles (apply, plan-only, frontend-deploy). Bootstrap state stays **local** because it creates the bucket that stores the main stack's state. Run with an administrator AWS session:
+Creates only the S3 bucket that stores the Terraform state. Its own state stays local.
+
+### `infra/`
+
+Creates the application bucket (`creatura-assets-<suffix>`), uploads the PNGs of `images/` under `sprites/`, and provisions the CloudFront distribution, its Origin Access Control and the `creatura-spa-rewrite` CloudFront Function. Uses the S3 backend with a partial configuration, so `terraform init` needs `-backend-config` values (see `infra/README.md`).
+
+Checks that need no AWS access:
 
 ```powershell
-cd bootstrap
-Copy-Item terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with your values
-terraform init
-terraform fmt -check
-terraform validate
-terraform plan -out=bootstrap.tfplan
-terraform apply bootstrap.tfplan
+terraform -chdir=infra init -backend=false
+terraform -chdir=infra fmt -check -recursive
+terraform -chdir=infra validate
 ```
 
-Outputs feed the GitHub Actions variables `AWS_ROLE_ARN`, `TF_STATE_BUCKET`, `TF_STATE_REGION`.
+## Create and Destroy on Demand
 
-### `infra/` — managed by CI
+The whole infrastructure is meant to be created and destroyed repeatedly to save AWS credits, so both buckets use `force_destroy = true` and no `prevent_destroy`. Create: `bootstrap` apply, `infra` init + apply, `scripts/deploy-frontend.ps1`. Destroy: `infra` destroy first, then `bootstrap` destroy. A bucket created before `force_destroy` was added needs one `terraform apply` before `terraform destroy`. The CloudFront hostname and the application bucket name change on every re-creation.
 
-Creates the S3 application bucket (`creatura-assets-<suffix>`), uploads all PNGs from `images/` under the `sprites/` prefix, and provisions the CloudFront distribution. Uses an S3 remote backend — `terraform init` requires the state bucket to already exist.
+## Site Layout and Caching
 
-Local plan (requires AWS credentials):
-```bash
-cd infra
-terraform init \
-  -backend-config="bucket=<TF_STATE_BUCKET>" \
-  -backend-config="key=creatura-infra/terraform.tfstate" \
-  -backend-config="region=eu-west-3" \
-  -backend-config="encrypt=true" \
-  -backend-config="use_lockfile=true"
-terraform fmt -check -recursive
-terraform validate
-terraform plan -var="aws_region=eu-west-3"
-```
+- `/` player PWA, `/admin/` admin dashboard (built with `--base=/admin/`), `/sprites/*` images, `/api/*` reserved for the backend.
+- Both apps use history-mode routing. `infra/functions/spa-rewrite.js` rewrites any URL without a file extension to `/index.html` or `/admin/index.html`. It is attached to the default cache behavior only.
+- `assets/*`, `admin/assets/*`, `sprites/*`: managed `CachingOptimized` policy, objects uploaded with a one-year immutable `Cache-Control`.
+- Default behavior (HTML, `sw.js`, manifest, icons): managed `CachingDisabled` policy, objects uploaded with `no-cache`.
+- The player service worker must not handle `/admin` navigations: see `navigateFallbackDenylist` in `creatura-app/apps/player/vite.config.ts`.
 
-## CI/CD Architecture
+## Publishing the Web Apps
 
-Two workflows under `.github/workflows/`:
+`scripts/deploy-frontend.ps1` (Windows PowerShell 5.1 compatible) builds both apps from a sibling `creatura-app` folder, stages them in `.deploy/site`, uploads them with explicit content types, and invalidates CloudFront. `-StageOnly` stops before any AWS call.
 
-**`terraform.yml`** — triggered on PRs and pushes to `main` affecting `infra/**`:
-- PR → `terraform-plan` environment, plan only (read-only IAM role)
-- Push to `main` → `production` environment, plan + apply
+## CI/CD
 
-**`deploy-frontend.yml`** — triggered by `repository_dispatch` event `frontend-updated` from app CI, or manually via `workflow_dispatch`:
-1. Verifies the source app workflow run (completed, success, correct branch)
-2. Downloads the frontend artifact
-3. Reads S3 bucket name and CloudFront distribution ID from Terraform state outputs
-4. Syncs frontend to S3, excluding `sprites/*` and `.creatura/*`
-5. Uploads `index.html` last (with `no-cache` headers)
-6. Invalidates CloudFront and waits for completion
-7. Verifies HTTP response headers on root, a sprite, and a hashed asset
-8. Writes `.creatura/frontend-release.json` as a release marker
+- `terraform.yml`: plan on pull requests, apply on `main`, for changes under `infra/`.
+- `deploy-frontend.yml`: publishes a frontend artifact produced by the app repository CI. Not usable yet, because the app repository has no CI.
 
-Rollback: manually dispatch `deploy-frontend.yml` with a previous successful run ID and `allow_rollback: true`.
-
-## IAM Role Split
-
-Three roles created by bootstrap, each with minimal permissions:
-- **apply role** (`AWS_ROLE_ARN`): full Terraform lifecycle (S3, CloudFront CRUD)
-- **plan role** (`AWS_PLAN_ROLE_ARN`): read-only, used for PR plans
-- **frontend deploy role** (`AWS_FRONTEND_ROLE_ARN`): can S3 sync + CloudFront invalidate + read state, **cannot** write Terraform state
-
-No long-lived AWS keys — all authentication is GitHub OIDC.
-
-## CloudFront Caching Strategy
-
-Defined in `infra/cloudfront.tf`:
-- `index.html` (default behavior): zero TTL cache policy — always revalidates
-- `assets/*` and `sprites/*`: managed long-lived policy `658327ea-...` (1-year immutable)
-- Sprites served from the private S3 bucket through Origin Access Control (SigV4)
-
-The deployment workflow uploads hashed assets first, then `index.html` last to ensure no window where new HTML references missing assets.
+Both use the `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` secrets and the repository variables listed in `infra/README.md`.
 
 ## Sprite Image Utilities (`sprites.py`)
 
 Not part of CI. Manual utility requiring `Pillow`:
 
 ```bash
-# Generate a numbered contact sheet for reviewing all sprites
 python sprites.py sheet images/ sheet.png
-
-# Resize all sprites to uniform size with margin
 python sprites.py resize images/ images-resized/ --size 128 --margin 4
 ```
 
-## GitHub Repository Configuration
+## Outdated Documents
 
-Variables needed (repository or environment level):
-```
-AWS_REGION=eu-west-3
-AWS_ROLE_ARN          # from bootstrap output
-AWS_PLAN_ROLE_ARN     # from bootstrap output
-AWS_FRONTEND_ROLE_ARN # from bootstrap output
-TF_STATE_BUCKET       # from bootstrap output
-TF_STATE_REGION=eu-west-3
-TF_STATE_KEY=creatura-infra/terraform.tfstate
-APP_REPOSITORY=<owner>/<app-repo>
-APP_PRODUCTION_BRANCH=main
-APP_WORKFLOW_ID       # optional, locks frontend deploy to a specific workflow
-```
-
-Secret (for private app repository):
-```
-APP_REPO_TOKEN  # GitHub token with access to app workflow artifacts
-```
-
-Protect the `production` environment with required reviewers and restrict it to the `main` branch. The IAM trust policies are scoped to these environment subjects — if environment names change, the bootstrap stack must be re-applied.
+`summary.md` and `audit-report.md` describe the first design (region `eu-west-3`, GitHub OIDC, three IAM roles). They no longer match the code.

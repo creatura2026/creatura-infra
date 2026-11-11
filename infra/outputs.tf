@@ -22,3 +22,7 @@ output "cloudfront_domain_name" {
   description = "CloudFront hostname for the sprite CDN."
   value       = aws_cloudfront_distribution.sprites.domain_name
 }
+output "site_url" {
+  description = "Public URL of the player PWA. The admin dashboard is served under /admin/."
+  value       = "https://${aws_cloudfront_distribution.sprites.domain_name}/"
+}

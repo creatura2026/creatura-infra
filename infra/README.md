@@ -1,83 +1,81 @@
-# Sprite S3 upload
+# Creatura web hosting (S3 + CloudFront)
 
-This Terraform configuration creates a private, encrypted S3 bucket, uploads every `*.png` file in the sibling `images/` directory under `sprites/`, and provisions a CloudFront distribution in front of the bucket.
+This stack creates:
 
-The bucket remains private. CloudFront uses Origin Access Control (OAC) and the generated bucket policy grants read access only to this distribution. Use the `cloudfront_domain_name` Terraform output as the public CDN hostname.
+- a private, encrypted, versioned S3 bucket (`creatura-assets-<suffix>`);
+- the PNG files of `../images/`, uploaded under `sprites/`;
+- a CloudFront distribution in front of the bucket, using Origin Access Control;
+- a CloudFront Function that serves the right `index.html` for client-side routes.
 
-## Use
+The bucket is never public. Users only reach it through the CloudFront hostname.
 
-Run the one-time `../bootstrap` stack first. It creates the GitHub OIDC role and the S3 state bucket required by this stack.
+## Site layout
 
-From this directory, authenticate to AWS using the AWS CLI or another supported credential source, then run:
+| URL | Content | Published by |
+| --- | --- | --- |
+| `/` | player PWA (`creatura-app/apps/player`) | `scripts/deploy-frontend.ps1` |
+| `/admin/` | admin dashboard (`creatura-app/apps/admin`, built with `--base=/admin/`) | `scripts/deploy-frontend.ps1` |
+| `/sprites/*.png` | creature sprites of this repository | Terraform |
+
+Both apps share one domain so that they share cookies. `/api/*` is reserved for the future backend.
+
+Caching: `assets/*`, `admin/assets/*` and `sprites/*` are cached for a long time (hashed or immutable files). Everything else (`index.html`, `sw.js`, `manifest.webmanifest`, icons) is never cached at the edge.
+
+## Region
+
+Use `eu-north-1`. The organization SCP `p-0vevikxq` explicitly denies `eu-west-1` and `eu-west-3`. CloudFront itself is a global service; only the bucket lives in `eu-north-1`.
+
+## Required AWS permissions
+
+The identity that runs Terraform and the deploy script needs:
+
+- S3: create and configure buckets, read and write objects;
+- CloudFront: distributions, origin access controls, functions and invalidations (the managed policy `CloudFrontFullAccess` covers it).
+
+No IAM permission is needed: this stack creates no role, user or policy.
+
+## Deploy the infrastructure
+
+Run the one-time `../bootstrap` stack first (it creates the Terraform state bucket), then:
 
 ```powershell
+cd infra
 terraform init `
-	-backend-config='bucket=your-terraform-state-bucket' `
-	-backend-config='key=creatura-infra/terraform.tfstate' `
-	-backend-config='region=eu-west-3' `
-	-backend-config='encrypt=true' `
-	-backend-config='use_lockfile=true'
-terraform fmt -check
-terraform validate
+  -backend-config="bucket=<state bucket name>" `
+  -backend-config="key=creatura-infra/terraform.tfstate" `
+  -backend-config="region=eu-north-1" `
+  -backend-config="encrypt=true" `
+  -backend-config="use_lockfile=true"
 terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-Use a unique bucket name when applying if you need a predictable name:
+Creating the distribution takes a few minutes. The `site_url` output is the public address.
+
+## Publish the web apps
+
+From the repository root, with `creatura-app` cloned next to this repository:
 
 ```powershell
-terraform apply -var='bucket_name=my-unique-creatura-assets'
+.\scripts\deploy-frontend.ps1 -StageOnly   # build and check locally, nothing is sent to AWS
+.\scripts\deploy-frontend.ps1              # build, upload to S3, invalidate CloudFront
 ```
+
+The script reads the bucket name and the distribution ID from the Terraform outputs. Old hashed assets are kept in the bucket, so a failed release does not break the live site.
+
+## Delete everything
+
+```powershell
+terraform -chdir=infra destroy       # from the repository root; takes several minutes on CloudFront
+terraform -chdir=bootstrap destroy   # always last: this bucket holds the state of infra/
+```
+
+The application bucket has `force_destroy` enabled: the destroy empties it, old object versions included. A bucket created before that setting existed needs one `terraform apply` first. The CloudFront hostname and the bucket name change on the next creation.
 
 ## GitHub Actions
 
-The workflow at `.github/workflows/terraform.yml` runs format, init, validate, plan, and apply for infrastructure changes. Frontend releases use `.github/workflows/deploy-frontend.yml` and do not run Terraform plan or apply.
+`.github/workflows/terraform.yml` plans on pull requests and applies on `main`. `.github/workflows/deploy-frontend.yml` publishes a frontend artifact built by the app repository CI. Both authenticate with the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` repository secrets, because IAM roles and OIDC cannot be created in this AWS organization.
 
-Configure these repository or environment variables before enabling the workflow:
+Repository variables: `AWS_REGION` (`eu-north-1`), `TF_STATE_BUCKET`, `TF_STATE_KEY`, `TF_STATE_REGION`, `APP_REPOSITORY`, `APP_PRODUCTION_BRANCH`, and optionally `APP_WORKFLOW_ID`. Secret `APP_REPO_TOKEN` gives read access to the app repository artifacts.
 
-- `APP_REPOSITORY`: app repository in `owner/repository` format
-- `APP_PRODUCTION_BRANCH`: app branch allowed for production artifacts, normally `main`
-- `APP_WORKFLOW_ID`: optional numeric app workflow ID used to verify the artifact source
-- `AWS_REGION`: AWS deployment region
-- `AWS_ROLE_ARN`: IAM role trusted by GitHub Actions OIDC
-- `AWS_PLAN_ROLE_ARN`: read-only IAM role used for pull-request plans
-- `AWS_FRONTEND_ROLE_ARN`: deployment-only role for S3 publishing and CloudFront invalidation
-- `TF_STATE_BUCKET`: pre-existing private S3 bucket for Terraform state
-- `TF_STATE_KEY`: state object key, for example `creatura-infra/terraform.tfstate`
-- `TF_STATE_REGION`: region of the Terraform state bucket
-
-The app CI owns `npm ci` and `npm run build`. It must upload the generated `dist/` directory as a GitHub Actions artifact and add an `APP_REPO_TOKEN` secret to this repository with read-only access to the app repository's workflow artifacts.
-
-After the app repository publishes a frontend change, it triggers `deploy-frontend.yml` with a `frontend-updated` repository dispatch. The payload must identify the completed app workflow run and artifact:
-
-```bash
-gh api repos/ORG/INFRA_REPOSITORY/dispatches \
-	--method POST \
-	-f event_type=frontend-updated \
-	-f 'client_payload[run_id]=123456789' \
-	-f 'client_payload[artifact_name]=frontend-abc123'
-```
-
-The state bucket must exist before the first workflow run. Configure the `production` environment with an approval rule so infrastructure changes are reviewed before apply. The AWS role should be restricted to this Terraform stack and the S3 bucket/CloudFront resources it manages.
-
-The Terraform workflow provisions the S3 bucket and CloudFront distribution and uploads the PNG assets currently in this repository. The frontend deployment workflow publishes the frontend build into the same S3 origin without changing infrastructure.
-
-The frontend deployment workflow also:
-
-- Serializes production releases so concurrent deployments do not publish at the same time.
-- Rejects an app workflow run older than the release marker already deployed.
-- Verifies the public root URL returns HTML.
-- Verifies a PNG selected from the repository's `images/` directory returns `image/png` with immutable caching.
-- Verifies one JavaScript or CSS asset returns the expected content type and immutable cache header.
-- Compares Terraform state checksums before and after the frontend-only deployment.
-- Waits for the specific CloudFront invalidation created by the deployment.
-
-CloudFront uses a dedicated zero-TTL cache policy for `index.html`. Frontend assets and sprites are uploaded with `public, max-age=31536000, immutable`; production builds should use hashed filenames for assets that can change.
-
-Frontend assets are uploaded before the release marker and `index.html` is promoted last. The deployment does not delete old frontend assets, which prevents a failed release from breaking the currently served HTML; stale hashed assets can be removed later by a dedicated cleanup job.
-
-To roll back, manually run `deploy-frontend.yml` with the run ID and artifact name of a previous successful app CI build and set `allow_rollback` to `true`. The protected `production` Environment still requires its normal approval; verify the public checks before declaring the rollback complete.
-
-Client-side SPA routes are not rewritten by the current CloudFront configuration. Add a CloudFront Function only after confirming the frontend uses client-side routing; the function must leave `/sprites/`, `/assets/`, JavaScript, CSS, and other real asset requests untouched.
-
-The bucket remains private. Access the objects through AWS credentials, a presigned URL, or add a deliberate distribution/access layer such as CloudFront rather than making the bucket public.
+The frontend workflow is not usable yet: the app repository has no CI that builds and uploads the artifact. The artifact must have the layout described above (player at the root, admin under `admin/`).
