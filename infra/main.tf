@@ -50,11 +50,11 @@ resource "aws_s3_bucket_versioning" "sprites" {
 resource "aws_s3_object" "sprite" {
   for_each = local.image_files
 
-  bucket       = aws_s3_bucket.sprites.id
-  key          = "${var.object_prefix}${each.value}"
-  source       = "${local.image_directory}/${each.value}"
-  etag         = filemd5("${local.image_directory}/${each.value}")
-  content_type = "image/png"
+  bucket        = aws_s3_bucket.sprites.id
+  key           = "${var.object_prefix}${each.value}"
+  source        = "${local.image_directory}/${each.value}"
+  etag          = filemd5("${local.image_directory}/${each.value}")
+  content_type  = "image/png"
   cache_control = "public, max-age=31536000, immutable"
 
   depends_on = [aws_s3_bucket_ownership_controls.sprites]
