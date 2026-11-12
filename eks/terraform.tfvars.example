@@ -1,0 +1,6 @@
+aws_region                  = "eu-north-1"
+cluster_name                = "creatura-backend"
+kubernetes_version          = "1.35" # Vérifier disponibilité et support AWS avant apply.
+deployment_principal_arn    = "arn:aws:iam::123456789012:role/creatura-deploy"
+administrator_principal_arn = "arn:aws:iam::123456789012:role/creatura-admin"
+endpoint_public_access_cidrs = ["203.0.113.10/32"] # Remplacer par l'IP de sortie du runner/admin.
