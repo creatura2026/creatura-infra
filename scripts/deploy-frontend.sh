@@ -5,6 +5,9 @@
 #   /            PWA joueur        (apps/player, base /)
 #   /admin/      dashboard admin   (apps/admin, construit avec la base /admin/)
 #   /sprites/    géré par Terraform, jamais touché par ce script
+#   /telechargements/   application Windows (apps/desktop) : les deux exe et latest.json, que la
+#                page d'accueil lit pour proposer le téléchargement. L'exe appelle l'API de
+#                site_url. Construit sous Windows (Git Bash) ou avec Wine, sinon étape sautée.
 #
 # Les fichiers à nom haché (assets/, admin/assets/) partent en premier avec un cache d'un an.
 # Le reste (index.html, service worker, manifeste, icônes) part en dernier en « no-cache ».
@@ -20,7 +23,9 @@
 #   --distribution-id ID    distribution à invalider (par défaut : sortie cloudfront_distribution_id)
 #   --mock                  API simulée dans le navigateur (VITE_API_MOCK=true) : à utiliser tant
 #                           que /api/* n'est pas relié à un back sur CloudFront
-#   --skip-build            réutilise le contenu déjà présent dans .deploy/site
+#   --skip-build            réutilise le contenu déjà présent dans .deploy/site (et l'exe déjà
+#                           construit dans creatura-app/apps/desktop/release)
+#   --skip-desktop          ne construit ni ne publie l'application Windows
 #   --stage-only            s'arrête avant le premier appel AWS
 set -euo pipefail
 
@@ -33,6 +38,7 @@ DISTRIBUTION_ID=""
 SKIP_BUILD="no"
 STAGE_ONLY="no"
 MOCK="no"
+DESKTOP="yes"
 
 IMMUTABLE_CACHE="public, max-age=31536000, immutable"
 REVALIDATE_CACHE="no-cache"
@@ -48,8 +54,9 @@ while [ $# -gt 0 ]; do
     --distribution-id) DISTRIBUTION_ID="${2:?}"; shift ;;
     --mock) MOCK="yes" ;;
     --skip-build) SKIP_BUILD="yes" ;;
+    --skip-desktop) DESKTOP="no" ;;
     --stage-only) STAGE_ONLY="yes" ;;
-    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "option inconnue : $1" ;;
   esac
   shift
@@ -171,6 +178,48 @@ while IFS=$'\t' read -r rank cache extension; do
   aws "${arguments[@]}"
   echo "  envoyé : .$extension ($cache)"
 done <<< "$groups"
+
+# --- 4. Application Windows -----------------------------------------------------------
+
+# electron-builder produit l'installeur Windows sous Windows, ou ailleurs avec Wine.
+can_build_windows() {
+  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; esac
+  command -v wine >/dev/null 2>&1
+}
+
+if [ "$DESKTOP" = "yes" ]; then
+  RELEASE_DIR="$APP_PATH/apps/desktop/release"
+  if [ "$SKIP_BUILD" = "no" ]; then
+    if can_build_windows; then
+      if [ "$MOCK" = "yes" ]; then
+        say "Application Windows (API simulée)"
+        (cd "$APP_PATH" && pnpm desktop:demo)
+      else
+        # Même adresse que le site : domaine personnalisé s'il existe, sinon CloudFront.
+        api_url="$(terraform_output site_url)"
+        api_url="${api_url%/}"
+        say "Application Windows (API $api_url)"
+        (cd "$APP_PATH" && pnpm desktop --api "$api_url")
+      fi
+    else
+      printf '\nApplication Windows non construite : il faut Windows (Git Bash) ou Wine. Le site reste\n'
+      printf 'publié ; la page d accueil ne propose l exe que si /telechargements/latest.json existe déjà.\n'
+      RELEASE_DIR=""
+    fi
+  fi
+  if [ -n "$RELEASE_DIR" ] && [ -f "$RELEASE_DIR/latest.json" ]; then
+    say "Envoi de l'application Windows vers s3://$BUCKET/telechargements/"
+    # Les exe d'abord : latest.json ne doit jamais pointer vers un fichier pas encore envoyé.
+    aws s3 cp "$RELEASE_DIR" "s3://$BUCKET/telechargements/" --recursive --only-show-errors \
+      --exclude "*" --include "Creatura-*.exe" \
+      --content-type "application/vnd.microsoft.portable-executable" --cache-control "$REVALIDATE_CACHE"
+    aws s3 cp "$RELEASE_DIR/latest.json" "s3://$BUCKET/telechargements/latest.json" --only-show-errors \
+      --content-type "application/json" --cache-control "$REVALIDATE_CACHE"
+    echo "  envoyé : version $(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$RELEASE_DIR/latest.json" | head -n 1)"
+  elif [ -n "$RELEASE_DIR" ]; then
+    die "latest.json absent de $RELEASE_DIR : construire l'exe (pnpm desktop dans creatura-app) ou passer --skip-desktop."
+  fi
+fi
 
 say "Invalidation de la distribution CloudFront $DISTRIBUTION_ID"
 aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*" \
