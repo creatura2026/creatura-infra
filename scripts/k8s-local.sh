@@ -15,6 +15,9 @@
 #             KUBE_CONTEXT (par défaut kind-creatura ; docker-desktop pour le Kubernetes
 #             de Docker Desktop, sans kind).
 set -euo pipefail
+# Lu en entier avant exécution (bloc { … }) : modifier ce fichier pendant qu'il tourne ne
+# casse pas l'exécution en cours (bash lit sinon un script au fur et à mesure).
+{
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_PATH="${APP_PATH:-$ROOT/../creatura-app}"
@@ -130,3 +133,5 @@ case "$command" in
   down) down ;;
   *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
+exit
+}

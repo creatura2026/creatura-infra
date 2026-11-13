@@ -43,8 +43,6 @@ Configurer dans l'environnement `production`. Ne pas conserver d'anciennes valeu
 | `EKS_ADMIN_PRINCIPAL_ARN` | ARN IAM administrateur ; vide = identité IAM de la CI |
 | `EKS_ADMIN_CIDRS` | Tableau JSON des CIDR administrateur, ex. `["203.0.113.10/32"]` ; défaut `[]` |
 | `GHCR_USERNAME` | Compte GitHub qui peut lire les packages privés |
-| `WAF_ENABLED` | `true` pour créer le pare-feu WAF devant CloudFront (payant, voir `infra/README.md`) ; défaut `false` |
-| `WAF_MODE` | `block` (défaut) ou `count` (observation sans blocage) |
 
 | Secret | Usage |
 |---|---|
@@ -53,35 +51,9 @@ Configurer dans l'environnement `production`. Ne pas conserver d'anciennes valeu
 | `APP_REPO_TOKEN` | Jeton GitHub avec lecture Actions du dépôt `creatura-app` (runs/artefacts) |
 | `GHCR_READ_TOKEN` | PAT classique avec `read:packages` et accès aux packages backend/DB ; autoriser SSO si exigé |
 
-`API_ORIGIN_DOMAIN_NAME`, `AWS_ROLE_ARN`, `AWS_PLAN_ROLE_ARN`, `AWS_FRONTEND_ROLE_ARN`, `APP_WORKFLOW_ID` ne sont pas consommés par cette nouvelle chaîne.
+## Tout lancer, tout détruire
 
-## GitHub : dépôt creatura-app
-
-Ajouter le secret `INFRA_REPO_TOKEN` : jeton avec **Actions: write** sur `creatura-infra`, autorisé à déclencher `deploy-aws.yml`. Le `GITHUB_TOKEN` du dépôt app ne permet pas à lui seul le déclenchement inter-dépôts. Aucun accès AWS dans la CI app.
-
-Laisser GitHub Actions publier les packages backend/DB avec `GITHUB_TOKEN` (`packages: write`). Vérifier que `GHCR_USERNAME` côté infra a le droit de les lire.
-
-Les secrets d'environnement et les règles GitHub `production` restent applicables. Pour une livraison entièrement automatique, cet environnement doit autoriser `develop` sans attente de validation manuelle.
-
-## Secrets Kubernetes
-
-Le déploiement crée le namespace, le Secret de lecture GHCR et le Secret applicatif ; aucune saisie manuelle de mot de passe RDS. Le secret administrateur DB est lu depuis Secrets Manager, transmis par stdin au Job, puis supprimé du cluster même si le Job échoue.
-
-`creatura-backend` contient : `DATABASE_URL` directe RDS avec TLS, `DB_IAM_AUTH=true`, `AWS_REGION`, `TIMEZONE=Europe/Paris`, `IMAGE_BASE_URL`, `CORS_ORIGINS` et une `JWT_SECRET` générée une fois et conservée. À la création initiale : `ADMIN_LOGIN=admin` et mot de passe aléatoire conservé dans le Secret. Ne jamais afficher ce secret dans les logs CI. Un administrateur peut lire le mot de passe initial avec kubectl depuis une session autorisée.
-
-Les mises à jour de Secret entraînent un redémarrage des pods pour relire la configuration. L'identité IAM des pods reste celle définie dans `eks/rds.tf` ; elle est indépendante de la clé AWS du workflow.
-
-## Reprise et limites
-
-`Deploy Creatura AWS` peut être relancé manuellement avec `app_run_id` et `app_run_attempt` (run CI app réussi sur develop et tentative exacte), ou sans valeur (dernier run réussi). Cela ne reconstruit rien. Les noms d’artefacts incluent le run et sa tentative. Aucune sélection par tag `latest`, `develop` ou SHA court : les deux images utilisent leur digest complet et l’archive frontend son SHA-256 dans `release.json`. Si un artefact manque, est expiré, altéré ou vient d’une autre tentative, le déploiement échoue ; il ne choisit jamais un autre build en remplacement. Relancer **tous les jobs** de la CI app après expiration ou un échec nécessitant une nouvelle tentative ; une relance partielle ne mélange pas les artefacts d’anciennes tentatives.
-
-Pas de retour arrière DB automatique ; ne pas publier de migration incompatible avec les anciens pods pendant un rolling update. Un échec ne supprime pas les ressources et n'essaie pas de contourner les verrous d'état. Les anciennes versions front restent dans S3. Les migrations peuvent déjà avoir été appliquées si une étape ultérieure échoue.
-
-Le tronçon CloudFront → ALB reste HTTP comme dans A52 ; le navigateur utilise HTTPS. RDS reste configuré sans protection de suppression ni snapshot final : le garde-fou CI ne remplace pas une stratégie de sauvegarde.
-
-Les scripts locaux A52 `aws-up.sh`, `build-images.sh`, `deploy-frontend.sh` restent disponibles pour le travail manuel, mais ne doivent pas être utilisés pour relivrer en parallèle de cette CI. Seul `deploy-frontend.sh --skip-build` est appelé par la CI. `aws-up.sh` utilise encore sa convention historique de bucket : ne pas l'exécuter contre l'état CI sans adaptation.
-
-## Vérification sans AWS
+Avec un profil AWS administrateur et `creatura-app` cloné à côté de ce dépôt :
 
 ```sh
 terraform -chdir=bootstrap init -backend=false
@@ -93,9 +65,22 @@ terraform -chdir=eks validate
 python -m pip install PyYAML==6.0.2
 python -m unittest discover -s tests -v
 find scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
+scripts/aws-up.sh                # crée ou complète tout l'environnement (20 à 25 min), ou reprend après une pause
+scripts/aws-pause.sh             # pause sans rien détruire : nœuds à 0, NAT supprimé, base arrêtée
+scripts/aws-down.sh --snapshot   # détruit tout, après un snapshot de la base
 ```
 
-Les workflows sont contrôlés par actionlint. L'exécution réelle de la CI app et le déploiement AWS nécessitent les permissions, secrets et ressources du compte ; une validation locale ne prouve pas leur réussite.
+| État | Coût indicatif | Reprise |
+| --- | --- | --- |
+| En marche | environ 7 $ par jour | — |
+| En pause (`aws-pause.sh`) | environ 3 $ par jour (plan de contrôle EKS, ALB, stockage) | `aws-up.sh`, 5 à 10 min, données conservées |
+| Détruit (`aws-down.sh --snapshot`) | quelques centimes par mois (snapshot, zone DNS) | `aws-up.sh`, 20 à 25 min, base restaurée depuis le dernier snapshot |
+
+À la création de la base, `aws-up.sh` restaure le dernier snapshot manuel `creatura-db-*` (`--fresh-db` pour une base neuve). La clé JWT et le mot de passe admin sont gardés dans `.deploy/backend-secrets.env` (ignoré par git, à ne pas perdre) : le compte admin d'une base restaurée garde ainsi son mot de passe.
+
+En pause, le front reste en ligne mais l'API répond 503. AWS redémarre seul une base arrêtée au bout de 7 jours : pour une longue interruption, préférer `aws-down.sh --snapshot`.
+
+`aws-up.sh` enchaîne : bucket d'état, images construites dans AWS (CodeBuild, sans Docker sur le poste), cluster et base, CDN et front, schéma de la base, déploiement du back, route `/api/*`, puis contrôle de santé. Il est ré-exécutable et affiche à la fin les adresses du site, de l'admin et de l'API. Prérequis : `aws`, `terraform`, `kubectl`, `python3`, `git`, `zip`, `pnpm`, et `eks/terraform.tfvars` (modèle : `eks/terraform.tfvars.example`).
 
 Lors de la première installation, le push infra peut échouer avant AWS si la CI app existante ne fournit pas encore la release v2. C’est attendu : une fois les deux modifications installées et les secrets configurés, un nouveau push app sur develop produit la première release v2 et déclenche son déploiement. Les anciens artefacts ne sont jamais utilisés par défaut en remplacement.
 ## DNS dans la CI/CD

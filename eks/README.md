@@ -70,6 +70,8 @@ La base est dans les sous-réseaux privés du cluster, sans adresse publique. So
 - **Session psql ponctuelle** : lancer un pod temporaire, par exemple `kubectl -n creatura run psql --rm -it --image=postgres:16 --env=PGPASSWORD=... -- psql "host=ADRESSE dbname=creatura user=creatura sslmode=require"`.
 - **Image du Job** : `ghcr.io/creatura2026/creatura-db:develop`, publiée par la CI de creatura-app. Si le package est privé, ajouter `imagePullSecrets` au Job comme au Deployment.
 
+Restauration : `db_snapshot_identifier` crée la base à partir d'un snapshot (sans effet sur une base existante) ; `scripts/aws-up.sh` y met automatiquement le dernier snapshot manuel `creatura-db-*`.
+
 `rds.tf` reprend `infra/rds.tf` de la branche `AS-49-rds`. Ne pas fusionner les deux : la base serait créée deux fois.
 
 ### Sauvegardes et restauration

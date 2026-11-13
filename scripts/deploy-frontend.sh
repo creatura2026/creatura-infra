@@ -28,6 +28,9 @@
 #   --skip-desktop          ne construit ni ne publie l'application Windows
 #   --stage-only            s'arrête avant le premier appel AWS
 set -euo pipefail
+# Lu en entier avant exécution (bloc { … }) : modifier ce fichier pendant qu'il tourne ne
+# casse pas l'exécution en cours (bash lit sinon un script au fur et à mesure).
+{
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INFRA_DIR="$ROOT/infra"
@@ -203,7 +206,7 @@ if [ "$DESKTOP" = "yes" ]; then
       fi
     else
       printf '\nApplication Windows non construite : il faut Windows (Git Bash) ou Wine. Le site reste\n'
-      printf 'publié ; la page d accueil ne propose l exe que si /telechargements/latest.json existe déjà.\n'
+      printf 'publié ; la page d accueil ne propose l exe que si /telechargements/latest.json décrit une version.\n'
       RELEASE_DIR=""
     fi
   fi
@@ -221,9 +224,19 @@ if [ "$DESKTOP" = "yes" ]; then
   fi
 fi
 
+# Sans exe publié, l'app joueur demande quand même /telechargements/latest.json à chaque visite :
+# un manifeste « aucune version » évite ce 404 (le front n'affiche alors pas le téléchargement).
+if ! aws s3api head-object --bucket "$BUCKET" --key "telechargements/latest.json" >/dev/null 2>&1; then
+  say "Aucune application Windows publiée : latest.json « non disponible » (évite le 404)"
+  printf '{\n  "available": false\n}\n' | aws s3 cp - "s3://$BUCKET/telechargements/latest.json" --only-show-errors \
+    --content-type "application/json" --cache-control "$REVALIDATE_CACHE"
+fi
+
 say "Invalidation de la distribution CloudFront $DISTRIBUTION_ID"
 aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*" \
   --query "Invalidation.Id" --output text
 
 domain="$(aws cloudfront get-distribution --id "$DISTRIBUTION_ID" --query "Distribution.DomainName" --output text)"
 printf '\nTerminé. Joueur : https://%s/   Admin : https://%s/admin/\n' "$domain" "$domain"
+exit
+}

@@ -24,6 +24,11 @@ variable "cluster_name" {
   type    = string
   default = "creatura-backend"
 }
+variable "paused" {
+  description = "Pause (scripts/aws-pause.sh) : NAT supprimé et nœuds autorisés à 0. Le cluster, la base, l'ALB et le réseau restent."
+  type        = bool
+  default     = false
+}
 variable "kubernetes_version" {
   description = "Version EKS en support standard disponible dans la région ; à choisir avant création."
   type        = string
@@ -53,7 +58,8 @@ module "vpc" {
   azs                  = slice(data.aws_availability_zones.available.names, 0, 2)
   private_subnets      = ["10.51.1.0/24", "10.51.2.0/24"]
   public_subnets       = ["10.51.101.0/24", "10.51.102.0/24"]
-  enable_nat_gateway   = true
+  # En pause, plus aucun nœud ne sort sur Internet : le NAT (payant à l'heure) est supprimé.
+  enable_nat_gateway   = !var.paused
   single_nat_gateway   = true
   enable_dns_hostnames = true
   public_subnet_tags   = { "kubernetes.io/role/elb" = "1" }
@@ -95,7 +101,8 @@ module "eks" {
       # AL2 n'existe plus à partir de Kubernetes 1.33 : type d'AMI explicite.
       ami_type       = "AL2023_x86_64_STANDARD"
       instance_types = ["t3.small"]
-      min_size       = 2
+      # Taille souhaitée ignorée par le module après création : aws-pause.sh et aws-up.sh la règlent par la CLI.
+      min_size       = var.paused ? 0 : 2
       max_size       = 3
       desired_size   = 2
     }

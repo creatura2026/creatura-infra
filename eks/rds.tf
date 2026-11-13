@@ -18,6 +18,16 @@
 # ni snapshot final.
 # =============================================================================
 
+variable "db_snapshot_identifier" {
+  description = <<-EOT
+    Snapshot RDS à restaurer à la CRÉATION de la base (ex. creatura-db-2026-11-13-1222). Vide : base neuve.
+    Sans effet sur une base existante (ignore_changes) : changer cette valeur ne remplace jamais la base.
+    scripts/aws-up.sh y met le dernier snapshot manuel creatura-db-* quand la base n'existe pas encore.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "db_instance_class" {
   description = "Taille de l'instance RDS."
   type        = string
@@ -148,8 +158,10 @@ resource "aws_db_instance" "creatura" {
   storage_type      = "gp3"
   storage_encrypted = true
 
-  db_name                     = local.db_name
-  username                    = "creatura"
+  # Restauration : nom de la base et compte principal viennent du snapshot (AWS refuse DBName ici).
+  snapshot_identifier         = var.db_snapshot_identifier == "" ? null : var.db_snapshot_identifier
+  db_name                     = var.db_snapshot_identifier == "" ? local.db_name : null
+  username                    = var.db_snapshot_identifier == "" ? "creatura" : null
   manage_master_user_password = true
 
   # Le back se connecte avec un jeton IAM, pas avec un mot de passe.
@@ -175,6 +187,11 @@ resource "aws_db_instance" "creatura" {
   delete_automated_backups = true
 
   tags = local.db_tags
+
+  lifecycle {
+    # Le snapshot ne sert qu'à la création : le changer ou le vider ensuite ne doit rien remplacer.
+    ignore_changes = [snapshot_identifier]
+  }
 }
 
 # -----------------------------------------------------------------------------

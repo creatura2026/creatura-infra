@@ -11,6 +11,9 @@
 #
 # Options : --profile NOM, --snapshot, --yes (pas de confirmation).
 set -euo pipefail
+# Lu en entier avant exécution (bloc { … }) : modifier ce fichier pendant qu'il tourne ne
+# casse pas l'exécution en cours (bash lit sinon un script au fur et à mesure).
+{
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REGION="eu-north-1"
@@ -36,6 +39,26 @@ say() { printf '\n==> [%s] %s\n' "$(elapsed)" "$*"; }
 die() { printf '\nErreur : %s\n' "$*" >&2; exit 1; }
 tf() { terraform "-chdir=$ROOT/$1" "${@:2}"; }
 tail_log() { printf -- '--- fin de %s\n' "$1" >&2; tail -25 "$1" >&2; }
+
+# Avancement des étapes en arrière-plan (sinon rien ne s'affiche pendant de longues minutes) :
+# toutes les 30 s, ressources terminées et ressource en cours, lues dans chaque journal.
+progress() {
+  local pids="$1"; shift
+  local alive pid log done_n current
+  while :; do
+    alive=""
+    for pid in $pids; do kill -0 "$pid" 2>/dev/null && alive="yes"; done
+    [ -n "$alive" ] || return 0
+    sleep 30
+    for log in "$@"; do
+      [ -f "$log" ] || continue
+      done_n="$(grep -cE '(Creation|Destruction|Modifications) complete' "$log" || true)"
+      current="$(grep -E 'Still (creating|destroying|modifying)' "$log" | tail -1 \
+        | sed -E 's/\x1b\[[0-9;]*m//g; s/: Still/ :/; s/\[id=[^]]*\], //; s/ elapsed\]/]/' || true)"  # rien en cours : pas d'erreur
+      printf '    [%s] %-14s %3s terminées  %s\n' "$(elapsed)" "$(basename "$log" .log)" "$done_n" "$current"
+    done
+  done
+}
 mkdir -p "$LOGS"
 
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)" || die "identité AWS invalide."
@@ -77,6 +100,7 @@ pid_infra=$!
 tf eks destroy -input=false -auto-approve -var "create_ecr_repositories=true" -var "create_image_builder=true" \
   >"$LOGS/destroy-eks.log" 2>&1 &
 pid_eks=$!
+progress "$pid_infra $pid_eks" "$LOGS/destroy-infra.log" "$LOGS/destroy-eks.log"
 failed=""
 wait "$pid_infra" || failed="$failed destroy-infra"
 wait "$pid_eks" || failed="$failed destroy-eks"
@@ -99,3 +123,5 @@ say "Stacks applicatives détruites ; DNS conservé s’il était configuré"
 aws rds describe-db-snapshots --region "$REGION" --snapshot-type manual \
   --query 'DBSnapshots[?starts_with(DBSnapshotIdentifier, `creatura-db-`)].[DBSnapshotIdentifier,SnapshotCreateTime]' --output text \
   | sed 's/^/  snapshot conservé : /'
+exit
+}

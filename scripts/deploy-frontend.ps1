@@ -268,6 +268,17 @@ if (-not $SkipDesktop) {
   Write-Host "  uploaded Windows app $version"
 }
 
+
+# Without a published exe, the player app still requests /telechargements/latest.json on every
+# visit: a "no release" manifest avoids that 404 (the front then hides the download section).
+& aws s3api head-object --bucket $Bucket --key 'telechargements/latest.json' *> $null
+if ($LASTEXITCODE -ne 0) {
+  $placeholder = Join-Path ([System.IO.Path]::GetTempPath()) 'creatura-latest.json'
+  [System.IO.File]::WriteAllText($placeholder, "{`n  `"available`": false`n}`n")
+  Invoke-Native aws @('s3', 'cp', $placeholder, "s3://$Bucket/telechargements/latest.json", '--only-show-errors',
+    '--content-type', 'application/json', '--cache-control', 'no-cache')
+  Remove-Item $placeholder
+}
 Write-Host "==> Invalidating CloudFront distribution $DistributionId" -ForegroundColor Cyan
 Invoke-Native aws @('cloudfront', 'create-invalidation', '--distribution-id', $DistributionId, '--paths', '/*', '--query', 'Invalidation.Id', '--output', 'text')
 

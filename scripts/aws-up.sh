@@ -12,8 +12,11 @@
 #   3. schéma de la base (Job k8s/db/schema-job.yaml), Secret et déploiement du back
 #   4. route /api/* de CloudFront vers l'ALB, puis contrôle de santé de bout en bout
 #
-# Ré-exécutable : chaque étape ne crée que ce qui manque. Le Secret du back (clé JWT,
-# mot de passe admin) est conservé d'une exécution à l'autre tant que le cluster existe.
+# Ré-exécutable : chaque étape ne crée que ce qui manque.
+# Base : à sa création, elle est restaurée depuis le dernier snapshot manuel creatura-db-*
+# (fait par scripts/aws-down.sh --snapshot) ; --fresh-db pour partir d'une base neuve.
+# Clé JWT et mot de passe admin : gardés dans .deploy/backend-secrets.env (ignoré par git) et
+# réutilisés d'un lancement à l'autre, pour qu'une base restaurée garde son compte admin.
 # Durée : 20 à 25 minutes au premier lancement, surtout l'attente d'EKS et de RDS.
 # Coût : environ 0,30 $ de l'heure tant que l'environnement existe, plus le pare-feu WAF
 # (environ 10 $ par mois, au prorata). Tout détruire : scripts/aws-down.sh.
@@ -23,9 +26,11 @@
 # eks/terraform.tfvars (voir eks/terraform.tfvars.example). L'IP publique du poste est
 # relue à chaque lancement pour l'accès à l'API du cluster.
 #
-# Options : --profile NOM, --app-path DIR, --skip-images (réutilise les dernières images ECR),
-#           --no-waf (pas de pare-feu WAF devant CloudFront ; il est actif et bloquant par défaut).
+# Options : --profile NOM, --app-path DIR, --skip-images (réutilise les dernières images ECR).
 set -euo pipefail
+# Lu en entier avant exécution (bloc { … }) : modifier ce fichier pendant qu'il tourne ne
+# casse pas l'exécution en cours (bash lit sinon un script au fur et à mesure).
+{
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_PATH="$ROOT/../creatura-app"
@@ -33,9 +38,11 @@ REGION="eu-north-1"
 NAMESPACE="creatura"
 SKIP_IMAGES="no"
 WAF="yes"
+FRESH_DB="no"
 WORK="$ROOT/.deploy"
 LOGS="$WORK/logs"
 export KUBECONFIG="$WORK/kubeconfig-eks"   # jamais le ~/.kube/config de l'utilisateur
+SECRETS_FILE="$WORK/backend-secrets.env"   # clé JWT et mot de passe admin, réutilisés (voir en-tête)
 export AWS_PAGER=""
 
 while [ $# -gt 0 ]; do
@@ -44,6 +51,7 @@ while [ $# -gt 0 ]; do
     --app-path) APP_PATH="${2:?}"; shift ;;
     --skip-images) SKIP_IMAGES="yes" ;;
     --no-waf) WAF="no" ;;
+    --fresh-db) FRESH_DB="yes" ;;
     -h|--help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'Option inconnue : %s\n' "$1" >&2; exit 1 ;;
   esac
@@ -56,6 +64,26 @@ elapsed() { local s=$(( $(date +%s) - START )); printf '%02d:%02d' $((s / 60)) $
 die() { printf '\nErreur : %s\n' "$*" >&2; exit 1; }
 tf() { terraform "-chdir=$ROOT/$1" "${@:2}"; }
 tail_log() { printf -- '--- fin de %s\n' "$1" >&2; tail -25 "$1" >&2; }
+
+# Avancement des étapes en arrière-plan (sinon rien ne s'affiche pendant de longues minutes) :
+# toutes les 30 s, ressources terminées et ressource en cours, lues dans chaque journal.
+progress() {
+  local pids="$1"; shift
+  local alive pid log done_n current
+  while :; do
+    alive=""
+    for pid in $pids; do kill -0 "$pid" 2>/dev/null && alive="yes"; done
+    [ -n "$alive" ] || return 0
+    sleep 30
+    for log in "$@"; do
+      [ -f "$log" ] || continue
+      done_n="$(grep -cE '(Creation|Destruction|Modifications) complete' "$log" || true)"
+      current="$(grep -E 'Still (creating|destroying|modifying)' "$log" | tail -1 \
+        | sed -E 's/\x1b\[[0-9;]*m//g; s/: Still/ :/; s/\[id=[^]]*\], //; s/ elapsed\]/]/' || true)"  # rien en cours : pas d'erreur
+      printf '    [%s] %-14s %3s terminées  %s\n' "$(elapsed)" "$(basename "$log" .log)" "$done_n" "$current"
+    done
+  done
+}
 
 for cmd in aws terraform kubectl python3 git zip pnpm curl; do
   command -v "$cmd" >/dev/null 2>&1 || die "$cmd est introuvable."
@@ -73,6 +101,7 @@ EKS_VARS=(
   -var "endpoint_public_access_cidrs=[\"$IP/32\"]"
   -var "create_ecr_repositories=true"
   -var "create_image_builder=true"
+  -var "paused=false"   # reprise après scripts/aws-pause.sh : NAT recréé, minimum de 2 nœuds
 )
 say "Compte $ACCOUNT, région $REGION, accès au cluster depuis $IP"
 
@@ -109,6 +138,49 @@ for stack in eks infra; do
     || { tail_log "$LOGS/init-$stack.log"; die "init $stack/"; }
 done
 
+# --- Reprise après une pause (scripts/aws-pause.sh) : nœuds et base relancés -------------
+DB=""
+CLUSTER_NOW="$(tf eks output -raw cluster_name 2>/dev/null || true)"
+if [ -n "$CLUSTER_NOW" ] && aws eks describe-cluster --region "$REGION" --name "$CLUSTER_NOW" >/dev/null 2>&1; then
+  NODEGROUP="$(aws eks list-nodegroups --region "$REGION" --cluster-name "$CLUSTER_NOW" --query 'nodegroups[0]' --output text)"
+  desired="$(aws eks describe-nodegroup --region "$REGION" --cluster-name "$CLUSTER_NOW" --nodegroup-name "$NODEGROUP" \
+    --query 'nodegroup.scalingConfig.desiredSize' --output text 2>/dev/null || echo 2)"
+  if [ "$desired" = "0" ]; then
+    # Le NAT d'abord : sans lui, les nœuds ne peuvent pas télécharger leurs images système.
+    say "Reprise : NAT recréé"
+    tf eks apply -input=false -auto-approve "${EKS_VARS[@]}" -target=module.vpc >"$LOGS/resume-vpc.log" 2>&1 \
+      || { tail_log "$LOGS/resume-vpc.log"; die "reprise du réseau"; }
+    say "Reprise : nœuds du groupe $NODEGROUP relancés (2)"
+    # Taille souhaitée réglée par la CLI (ignorée par Terraform) ; le minimum repasse à 2 avec paused=false.
+    aws eks update-nodegroup-config --region "$REGION" --cluster-name "$CLUSTER_NOW" --nodegroup-name "$NODEGROUP" \
+      --scaling-config minSize=0,maxSize=3,desiredSize=2 >/dev/null
+    aws eks wait nodegroup-active --region "$REGION" --cluster-name "$CLUSTER_NOW" --nodegroup-name "$NODEGROUP"
+  fi
+fi
+DB="$(aws rds describe-db-instances --region "$REGION" \
+  --query 'DBInstances[?starts_with(DBInstanceIdentifier, `creatura-db-`)].DBInstanceIdentifier | [0]' --output text 2>/dev/null || true)"
+if [ -n "$DB" ] && [ "$DB" != "None" ]; then
+  case "$(aws rds describe-db-instances --region "$REGION" --db-instance-identifier "$DB" --query 'DBInstances[0].DBInstanceStatus' --output text)" in
+    stopped) say "Reprise : redémarrage de la base $DB (attendue avant le schéma)"
+             aws rds start-db-instance --region "$REGION" --db-instance-identifier "$DB" >/dev/null ;;
+    stopping) die "la base $DB est en cours d'arrêt : relancer aws-up.sh dans quelques minutes." ;;
+  esac
+fi
+
+# Base à créer : restaurée depuis le dernier snapshot manuel, sauf --fresh-db.
+# (La variable n'a d'effet qu'à la création : sans risque pour une base existante.)
+if { [ -z "$DB" ] || [ "$DB" = "None" ]; } && [ "$FRESH_DB" = "no" ]; then
+  SNAPSHOT="$(aws rds describe-db-snapshots --region "$REGION" --snapshot-type manual \
+    --query 'sort_by(DBSnapshots[?starts_with(DBSnapshotIdentifier, `creatura-db-`) && Status==`available`], &SnapshotCreateTime)[-1].DBSnapshotIdentifier' \
+    --output text 2>/dev/null || true)"
+  if [ -n "$SNAPSHOT" ] && [ "$SNAPSHOT" != "None" ]; then
+    say "Base restaurée depuis le snapshot $SNAPSHOT (--fresh-db pour une base neuve)"
+    EKS_VARS+=(-var "db_snapshot_identifier=$SNAPSHOT")
+  else
+    say "Aucun snapshot creatura-db-* : base neuve"
+  fi
+fi
+
 # --- 2. Images, cluster et CDN en parallèle -------------------------------------------
 say "Dépôts ECR et projet CodeBuild"
 tf eks apply -input=false -auto-approve "${EKS_VARS[@]}" -target=aws_codebuild_project.images \
@@ -130,6 +202,7 @@ case "$API_ORIGIN_NOW" in *.elb.amazonaws.com) ;; *) API_ORIGIN_NOW="" ;; esac
     "${DOMAIN_VARS[@]}" "${WAF_VARS[@]}" && "$ROOT/scripts/deploy-frontend.sh" --app-path "$APP_PATH"
 } >"$LOGS/infra.log" 2>&1 &
 pid_infra=$!
+progress "${pid_images:-} $pid_eks $pid_infra" "$LOGS/eks.log" "$LOGS/infra.log"
 
 failed=""
 if [ "$SKIP_IMAGES" = "no" ]; then wait "$pid_images" || failed="$failed images"; fi
@@ -152,6 +225,9 @@ case "$DB_IMAGE$BACKEND_IMAGE" in *None*) die "image absente d'ECR : relancer sa
 aws eks update-kubeconfig --region "$REGION" --name "$(tf eks output -raw cluster_name)" --alias creatura-eks >/dev/null
 kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$NAMESPACE" >/dev/null
 
+if [ -n "$DB" ] && [ "$DB" != "None" ]; then
+  aws rds wait db-instance-available --region "$REGION" --db-instance-identifier "$DB"
+fi
 say "Schéma de la base (Job, image $DB_IMAGE)"
 secret_arn="$(tf eks output -raw db_master_secret_arn)"
 db_password="$(aws secretsmanager get-secret-value --region "$REGION" --secret-id "$secret_arn" --query SecretString --output text \
@@ -175,19 +251,34 @@ kubectl -n "$NAMESPACE" delete secret creatura-db-admin >/dev/null   # le mot de
 CDN_URL="$(tf infra output -raw site_url)"; CDN_URL="${CDN_URL%/}"   # domaine personnalisé s'il y en a un
 if kubectl -n "$NAMESPACE" get secret creatura-backend >/dev/null 2>&1; then
   say "Secret du back existant conservé"
+  if [ ! -f "$SECRETS_FILE" ]; then   # pour qu'une future base restaurée garde ce compte admin
+    ( umask 077
+      for key in JWT_SECRET ADMIN_PASSWORD; do
+        printf '%s=%s\n' "$key" "$(kubectl -n "$NAMESPACE" get secret creatura-backend -o "jsonpath={.data.$key}" | base64 -d)"
+      done > "$SECRETS_FILE" )
+  fi
   # Le domaine CloudFront change à chaque re-création du CDN : on le remet à jour.
   kubectl -n "$NAMESPACE" patch secret creatura-backend --type merge -p \
     "{\"stringData\":{\"IMAGE_BASE_URL\":\"$CDN_URL\",\"CORS_ORIGINS\":\"$CDN_URL\",\"DATABASE_URL\":\"$(tf eks output -raw backend_database_url)\"}}" >/dev/null
 else
-  say "Secret du back (clé JWT et mot de passe admin générés)"
+  # Mêmes valeurs d'un lancement à l'autre : une base restaurée garde le compte admin d'avant.
+  if [ -f "$SECRETS_FILE" ]; then
+    say "Secret du back (clé JWT et mot de passe admin repris de $SECRETS_FILE)"
+  else
+    say "Secret du back (clé JWT et mot de passe admin générés, gardés dans $SECRETS_FILE)"
+    ( umask 077
+      printf 'JWT_SECRET=%s\nADMIN_PASSWORD=%s\n' \
+        "$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" \
+        "$(python3 -c 'import secrets; print(secrets.token_urlsafe(18))')" > "$SECRETS_FILE" )
+  fi
   kubectl -n "$NAMESPACE" create secret generic creatura-backend \
     --from-literal=DATABASE_URL="$(tf eks output -raw backend_database_url)" \
     --from-literal=DB_IAM_AUTH=true --from-literal=AWS_REGION="$REGION" \
-    --from-literal=JWT_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" \
+    --from-literal=JWT_SECRET="$(sed -n 's/^JWT_SECRET=//p' "$SECRETS_FILE")" \
     --from-literal=TIMEZONE=Europe/Paris \
     --from-literal=IMAGE_BASE_URL="$CDN_URL" --from-literal=CORS_ORIGINS="$CDN_URL" \
     --from-literal=ADMIN_LOGIN=admin \
-    --from-literal=ADMIN_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(18))')" >/dev/null
+    --from-literal=ADMIN_PASSWORD="$(sed -n 's/^ADMIN_PASSWORD=//p' "$SECRETS_FILE")" >/dev/null
 fi
 
 say "Déploiement du back ($BACKEND_IMAGE)"
@@ -250,3 +341,5 @@ cat <<EOF
 
   Coût : environ 0,30 \$ de l'heure (+ WAF). Tout détruire : scripts/aws-down.sh
 EOF
+exit
+}

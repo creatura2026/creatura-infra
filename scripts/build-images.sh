@@ -15,6 +15,9 @@
 # comprises. .env, .env.rds, .venv et caches (ignorés par git) ne partent jamais.
 # Affiche à la fin l'image épinglée par digest, à passer à scripts/render-backend.py.
 set -euo pipefail
+# Lu en entier avant exécution (bloc { … }) : modifier ce fichier pendant qu'il tourne ne
+# casse pas l'exécution en cours (bash lit sinon un script au fur et à mesure).
+{
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_PATH="$ROOT/../creatura-app"
@@ -153,3 +156,5 @@ for image in $IMAGES; do
   digest="$(aws ecr describe-images --region "$REGION" --repository-name "$image" --image-ids "imageTag=$TAG" --query 'imageDetails[0].imageDigest' --output text)"
   printf '  %s@%s\n' "$uri" "$digest"
 done
+exit
+}
