@@ -37,9 +37,26 @@ variable "db_engine_version" {
 }
 
 variable "db_backup_retention_days" {
-  description = "Durée de conservation des sauvegardes automatiques (0 = désactivées)."
+  description = "Durée de conservation des sauvegardes automatiques, en jours (0 = désactivées, 35 au plus). Gratuit jusqu'à la taille de la base."
   type        = number
-  default     = 1
+  default     = 7
+
+  validation {
+    condition     = var.db_backup_retention_days >= 0 && var.db_backup_retention_days <= 35
+    error_message = "db_backup_retention_days doit être compris entre 0 et 35."
+  }
+}
+
+variable "db_backup_window" {
+  description = "Plage quotidienne de la sauvegarde automatique, en UTC (la nuit, hors des heures de jeu)."
+  type        = string
+  default     = "01:00-02:00"
+}
+
+variable "db_maintenance_window" {
+  description = "Plage hebdomadaire de maintenance, en UTC. Ne doit pas chevaucher la sauvegarde."
+  type        = string
+  default     = "sun:02:30-sun:03:30"
 }
 
 variable "db_app_username" {
@@ -144,7 +161,12 @@ resource "aws_db_instance" "creatura" {
   publicly_accessible    = false
   multi_az               = false
 
+  # Sauvegarde quotidienne + journaux de transactions : restauration à la seconde près
+  # sur toute la durée de conservation (procédure testée : eks/README.md).
   backup_retention_period    = var.db_backup_retention_days
+  backup_window              = var.db_backup_window
+  maintenance_window         = var.db_maintenance_window
+  copy_tags_to_snapshot      = true
   auto_minor_version_upgrade = true
   apply_immediately          = true
 

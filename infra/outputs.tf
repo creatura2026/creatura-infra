@@ -1,3 +1,8 @@
+locals {
+  # Custom domain when set (dns/ stack), the CloudFront hostname otherwise.
+  public_url = "https://${var.custom_domain != "" ? var.custom_domain : aws_cloudfront_distribution.sprites.domain_name}"
+}
+
 output "bucket_name" {
   description = "Name of the S3 bucket containing the sprites."
   value       = aws_s3_bucket.sprites.bucket
@@ -25,10 +30,10 @@ output "cloudfront_domain_name" {
 
 output "api_url" {
   description = "Public URL of the API, empty while api_origin_domain_name is not set."
-  value       = var.api_origin_domain_name == "" ? "" : "https://${aws_cloudfront_distribution.sprites.domain_name}/api/v1"
+  value       = var.api_origin_domain_name == "" ? "" : "${local.public_url}/api/v1"
 }
 
 output "site_url" {
   description = "Public URL of the player PWA. The admin dashboard is served under /admin/."
-  value       = "https://${aws_cloudfront_distribution.sprites.domain_name}/"
+  value       = "${local.public_url}/"
 }

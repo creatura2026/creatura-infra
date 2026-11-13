@@ -52,6 +52,8 @@ The whole infrastructure is meant to be created and destroyed repeatedly to save
 
 `scripts/aws-up.sh` creates or completes the whole environment (bootstrap, ECR + CodeBuild images, `eks/` and `infra/` in parallel, schema Job, backend Secret and Deployment, `/api/*` route, health check through CloudFront); `scripts/aws-down.sh [--snapshot]` destroys it. Both are idempotent, bash 3.2 compatible, keep their logs in `.deploy/logs/`, and use `.deploy/kubeconfig-eks`, never the user's `~/.kube/config`. The workstation public IP is passed to `eks/` on each run (`endpoint_public_access_cidrs`). Keep them in sync with the manual steps in `eks/README.md`.
 
+Custom domain: the permanent `dns/` stack (local state, never destroyed by `aws-down.sh`) owns the delegated Route 53 zone and the ACM certificate in us-east-1. `infra/` takes `custom_domain`, `certificate_arn` and `route53_zone_id` together (aliases, viewer certificate, A/AAAA ALIAS records); `aws-up.sh` passes them only when the certificate is `ISSUED`.
+
 ## Backend on Kubernetes
 
 - `k8s/backend/` holds the Deployment and Service templates. On EKS they are rendered by `scripts/render-backend.py` (image pinned by GHCR digest) and applied by `deploy-backend.yml`; the cluster comes from the separate `eks/` stack (see `eks/README.md`).

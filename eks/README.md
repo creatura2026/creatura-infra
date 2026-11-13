@@ -72,6 +72,30 @@ La base est dans les sous-réseaux privés du cluster, sans adresse publique. So
 
 `rds.tf` reprend `infra/rds.tf` de la branche `AS-49-rds`. Ne pas fusionner les deux : la base serait créée deux fois.
 
+### Sauvegardes et restauration
+
+- **Sauvegardes automatiques** : une par jour entre 01 h et 02 h UTC, conservées 7 jours (`db_backup_retention_days`), avec les journaux de transactions. On peut donc restaurer la base **à la seconde près** sur cette période. Le stockage est gratuit jusqu'à la taille de la base.
+- **Avant une destruction** : `scripts/aws-down.sh --snapshot` garde un snapshot manuel, qui survit à `aws-down.sh`. Sans cette option, la base et ses sauvegardes automatiques sont supprimées.
+- **Restaurer** : une restauration crée toujours une **nouvelle** base, la base d'origine n'est pas touchée. Procédure testée le 13/11/2026 (comptes, collection et 42 tests du schéma retrouvés sur la copie) :
+
+```sh
+SRC=$(aws rds describe-db-instances --query "DBInstances[?DBName=='creatura'].DBInstanceIdentifier | [0]" --output text)
+read SUBNETS SG PG <<< "$(aws rds describe-db-instances --db-instance-identifier $SRC \
+  --query 'DBInstances[0].[DBSubnetGroup.DBSubnetGroupName,VpcSecurityGroups[0].VpcSecurityGroupId,DBParameterGroups[0].DBParameterGroupName]' --output text)"
+# --use-latest-restorable-time, ou --restore-time 2026-11-13T10:44:39Z pour un instant précis
+aws rds restore-db-instance-to-point-in-time --source-db-instance-identifier $SRC \
+  --target-db-instance-identifier creatura-restore-test --use-latest-restorable-time \
+  --db-instance-class db.t4g.micro --db-subnet-group-name $SUBNETS --vpc-security-group-ids $SG \
+  --db-parameter-group-name $PG --no-publicly-accessible --no-multi-az
+aws rds wait db-instance-available --db-instance-identifier creatura-restore-test
+```
+
+La copie a le mot de passe principal de la base d'origine au moment de la sauvegarde (secret Secrets Manager de la source). La vérifier depuis un pod du cluster avec l'image `creatura-db`, qui contient `psql` et `/db/tests/test_schema.sql` (Secret temporaire `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `PGSSLMODE=require`, supprimé ensuite). Pour remplacer la base, pointer `DATABASE_URL` et le rôle IAM du back sur la copie, ou la renommer ; sinon la supprimer :
+
+```sh
+aws rds delete-db-instance --db-instance-identifier creatura-restore-test --skip-final-snapshot --delete-automated-backups
+```
+
 ## Entrée publique de l'API (`api.tf`)
 
 Le front et l'API partagent le domaine CloudFront : le navigateur appelle `/api/v1` sur la même origine, sans CORS. Le trajet est CloudFront → ALB → NodePort 30080 des nœuds → pods du back. L'ALB est créé par cette stack (ni Ingress ni contrôleur à installer) et son groupe de sécurité n'accepte que CloudFront.

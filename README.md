@@ -96,3 +96,16 @@ find scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
 Les workflows sont contrôlés par actionlint. L'exécution réelle de la CI app et le déploiement AWS nécessitent les permissions, secrets et ressources du compte ; une validation locale ne prouve pas leur réussite.
 
 Lors de la première installation, le push infra peut échouer avant AWS si la CI app existante ne fournit pas encore la release v2. C’est attendu : une fois les deux modifications installées et les secrets configurés, un nouveau push app sur develop produit la première release v2 et déclenche son déploiement. Les anciens artefacts ne sont jamais utilisés par défaut en remplacement.
+## Nom de domaine (facultatif)
+
+La stack permanente `dns/` crée une zone Route 53 pour un sous-domaine (ex. `creatura.creasmaloud.dev`) et son certificat HTTPS. `aws-down.sh` ne la détruit pas, pour ne pas avoir à refaire la délégation.
+
+```sh
+cp dns/terraform.tfvars.example dns/terraform.tfvars   # mettre le sous-domaine voulu
+terraform -chdir=dns init && terraform -chdir=dns apply
+terraform -chdir=dns output name_servers
+```
+
+Chez le registrar : un enregistrement **NS** par serveur affiché, HOST = le sous-domaine (ex. `creatura`), et aucun autre enregistrement sur ce HOST. Le certificat se valide alors seul en quelques minutes, et `aws-up.sh` branche le domaine sur CloudFront dès qu'il est validé (statut `ISSUED`). Coût : 0,50 $ par mois pour la zone. État local dans `dns/terraform.tfstate` : ne pas le perdre.
+
+Détails : [`eks/README.md`](eks/README.md) (cluster, base, API, images) et [`infra/README.md`](infra/README.md) (CDN).
