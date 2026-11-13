@@ -46,6 +46,9 @@ jobs:
       EKS_KUBERNETES_VERSION: ${{ vars.EKS_KUBERNETES_VERSION }}
       EKS_ADMIN_PRINCIPAL_ARN: ${{ vars.EKS_ADMIN_PRINCIPAL_ARN }}
       EKS_ADMIN_CIDRS: ${{ vars.EKS_ADMIN_CIDRS || '[]' }}
+      # Pare-feu WAF devant CloudFront (infra/waf.tf) : désactivé tant que la variable n'est pas à true.
+      WAF_ENABLED: ${{ vars.WAF_ENABLED || 'false' }}
+      WAF_MODE: ${{ vars.WAF_MODE || 'block' }}
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
       AWS_PAGER: ""
