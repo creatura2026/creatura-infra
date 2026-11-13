@@ -7,6 +7,9 @@
     /            player PWA      (apps/player, base path /)
     /admin/      admin dashboard (apps/admin, built with base path /admin/)
     /sprites/    managed by Terraform, never touched by this script
+    /telechargements/  Windows app (apps/desktop): both exe files and latest.json, read by
+                 the home page to offer the download. The exe calls the API of site_url
+                 (simulated API with -Api mock).
 
   Hashed files under assets/ and admin/assets/ are uploaded first with a one-year
   immutable cache. Everything else (index.html, service worker, manifest, icons)
@@ -25,8 +28,17 @@
 .PARAMETER DistributionId
   CloudFront distribution to invalidate. Defaults to the "cloudfront_distribution_id" output.
 
+.PARAMETER Api
+  "mock" (default): the apps use their simulated API, stored in the browser. Use it as long
+  as the backend is not deployed: without a server, every /api call fails (POST answers 403).
+  "server": the apps call the real backend on /api/v1, on the same domain.
+
 .PARAMETER SkipBuild
-  Reuse the content already staged in .deploy/site instead of building again.
+  Reuse the content already staged in .deploy/site instead of building again (and the exe
+  already built in creatura-app/apps/desktop/release).
+
+.PARAMETER SkipDesktop
+  Neither build nor publish the Windows app.
 
 .PARAMETER StageOnly
   Build and stage the site locally, print what would be uploaded, and stop. Nothing is sent to AWS.
@@ -43,7 +55,9 @@ param(
   [string]$AwsProfile,
   [string]$Bucket,
   [string]$DistributionId,
+  [ValidateSet('mock', 'server')][string]$Api = 'mock',
   [switch]$SkipBuild,
+  [switch]$SkipDesktop,
   [switch]$StageOnly
 )
 
@@ -125,6 +139,11 @@ if (-not $SkipBuild) {
   New-Item -ItemType Directory -Force $StageDir | Out-Null
   $AdminStageDir = Join-Path $StageDir 'admin'
 
+  # Vite reads VITE_* variables from the environment; the apps switch API on this one.
+  $previousApiMock = $env:VITE_API_MOCK
+  $env:VITE_API_MOCK = if ($Api -eq 'mock') { 'true' } else { 'false' }
+  Write-Host "==> API mode: $Api" -ForegroundColor Cyan
+
   Push-Location $AppPath
   try {
     Write-Host '==> Installing dependencies' -ForegroundColor Cyan
@@ -140,6 +159,7 @@ if (-not $SkipBuild) {
   }
   finally {
     Pop-Location
+    $env:VITE_API_MOCK = $previousApiMock
   }
 }
 
@@ -209,6 +229,43 @@ foreach ($group in $groups) {
   $arguments += @('--content-type', $ContentTypes[$first.Extension])
   Invoke-Native aws $arguments
   Write-Host ("  uploaded {0,3} {1}" -f $group.Count, $first.Extension)
+}
+
+# --- 4. Windows app -------------------------------------------------------------------
+
+if (-not $SkipDesktop) {
+  $ReleaseDir = Join-Path $AppPath 'apps\desktop\release'
+  if (-not $SkipBuild) {
+    Push-Location $AppPath
+    try {
+      if ($Api -eq 'mock') {
+        Write-Host '==> Building the Windows app (simulated API)' -ForegroundColor Cyan
+        Invoke-Native pnpm @('desktop:demo')
+      }
+      else {
+        # Same address as the site: the custom domain when there is one, CloudFront otherwise.
+        $apiUrl = (Get-TerraformOutput 'site_url').TrimEnd('/')
+        Write-Host "==> Building the Windows app (API $apiUrl)" -ForegroundColor Cyan
+        Invoke-Native pnpm @('desktop', '--api', $apiUrl)
+      }
+    }
+    finally {
+      Pop-Location
+    }
+  }
+  $manifest = Join-Path $ReleaseDir 'latest.json'
+  if (-not (Test-Path $manifest)) {
+    throw "latest.json is missing from $ReleaseDir. Build the exe (pnpm desktop in creatura-app) or pass -SkipDesktop."
+  }
+  Write-Host "==> Uploading the Windows app to s3://$Bucket/telechargements/" -ForegroundColor Cyan
+  # The exe files first: latest.json must never point to a file that is not uploaded yet.
+  Invoke-Native aws @('s3', 'cp', $ReleaseDir, "s3://$Bucket/telechargements/", '--recursive', '--only-show-errors',
+    '--exclude', '*', '--include', 'Creatura-*.exe',
+    '--content-type', 'application/vnd.microsoft.portable-executable', '--cache-control', $RevalidateCache)
+  Invoke-Native aws @('s3', 'cp', $manifest, "s3://$Bucket/telechargements/latest.json", '--only-show-errors',
+    '--content-type', 'application/json', '--cache-control', $RevalidateCache)
+  $version = (Get-Content $manifest -Raw | ConvertFrom-Json).version
+  Write-Host "  uploaded Windows app $version"
 }
 
 Write-Host "==> Invalidating CloudFront distribution $DistributionId" -ForegroundColor Cyan

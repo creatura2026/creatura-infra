@@ -36,6 +36,10 @@ jobs:
     name: Publish frontend
     runs-on: ubuntu-latest
     environment: production
+    outputs:
+      bucket_name: ${{ steps.targets.outputs.bucket_name }}
+      site_url: ${{ steps.targets.outputs.site_url }}
+      app_sha: ${{ steps.source.outputs.app_sha }}
     env:
       APP_RUN_ID: ${{ github.event.client_payload.run_id || inputs.run_id }}
       APP_ARTIFACT_NAME: ${{ github.event.client_payload.artifact_name || inputs.artifact_name }}
@@ -50,6 +54,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Verify source app workflow
+        id: source
         env:
           GH_TOKEN: ${{ secrets.APP_REPO_TOKEN }}
           APP_REPOSITORY: ${{ vars.APP_REPOSITORY }}
@@ -69,6 +74,8 @@ jobs:
           artifacts_json=$(gh api "repos/${APP_REPOSITORY}/actions/runs/${APP_RUN_ID}/artifacts")
           artifact=$(jq -e --arg name "$APP_ARTIFACT_NAME" '.artifacts[] | select(.name == $name and .expired == false and .size_in_bytes > 0)' <<< "$artifacts_json")
           test -n "$artifact"
+          # Commit of the app release: the Windows app is built from the same sources.
+          echo "app_sha=$(jq -r '.head_sha' <<< "$run_json")" >> "$GITHUB_OUTPUT"
 
       - name: Download frontend build
         uses: actions/download-artifact@v4
@@ -107,7 +114,10 @@ jobs:
           -backend-config="use_lockfile=true"
 
       - name: Export deployment targets
+        id: targets
         run: |
+          echo "bucket_name=$(terraform output -raw bucket_name)" >> "$GITHUB_OUTPUT"
+          echo "site_url=$(terraform output -raw site_url)" >> "$GITHUB_OUTPUT"
           echo "BUCKET_NAME=$(terraform output -raw bucket_name)" >> "$GITHUB_ENV"
           echo "DISTRIBUTION_ID=$(terraform output -raw cloudfront_distribution_id)" >> "$GITHUB_ENV"
           echo "CDN_DOMAIN=$(terraform output -raw cloudfront_domain_name)" >> "$GITHUB_ENV"
@@ -210,3 +220,77 @@ jobs:
             --content-type "application/json" \
             --cache-control "no-cache, no-store, must-revalidate" \
             --metadata-directive REPLACE
+
+  # Windows app (creatura-app/apps/desktop), built from the same commit as the published front.
+  # The home page offers it as soon as /telechargements/latest.json exists. Built on Windows:
+  # electron-builder needs Wine elsewhere. A failure here leaves the published site untouched.
+  desktop:
+    name: Publish Windows app
+    needs: deploy
+    runs-on: windows-latest
+    environment: production
+    env:
+      BUCKET_NAME: ${{ needs.deploy.outputs.bucket_name }}
+      SITE_URL: ${{ needs.deploy.outputs.site_url }}
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: creatura-app
+
+    steps:
+      - name: Checkout app sources
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.APP_REPOSITORY }}
+          ref: ${{ needs.deploy.outputs.app_sha }}
+          token: ${{ secrets.APP_REPO_TOKEN }}
+          path: creatura-app
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: creatura-app/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the Windows app
+        run: |
+          test -n "$SITE_URL"
+          # The exe calls the API on the same domain as the site (custom domain or CloudFront).
+          pnpm desktop --api "${SITE_URL%/}"
+          test -f apps/desktop/release/latest.json
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Publish the Windows app to S3
+        run: |
+          test -n "$BUCKET_NAME"
+          # The exe files first: latest.json must never point to a file that is not uploaded yet.
+          aws s3 cp apps/desktop/release "s3://${BUCKET_NAME}/telechargements/" --recursive \
+            --exclude "*" --include "Creatura-*.exe" \
+            --content-type "application/vnd.microsoft.portable-executable" \
+            --cache-control "no-cache"
+          aws s3 cp apps/desktop/release/latest.json "s3://${BUCKET_NAME}/telechargements/latest.json" \
+            --content-type "application/json" \
+            --cache-control "no-cache"
+
+      - name: Verify public download
+        run: |
+          manifest=$(curl --fail --silent --show-error "${SITE_URL%/}/telechargements/latest.json")
+          echo "$manifest"
+          setup=$(jq -r '.setup.file' <<< "$manifest")
+          test "$(jq -r '.version' <<< "$manifest")" = "$(jq -r '.version' apps/desktop/release/latest.json)"
+          curl --fail --silent --show-error --head "${SITE_URL%/}/telechargements/${setup}" \
+            | grep -iq "^content-type: application/vnd.microsoft.portable-executable"
