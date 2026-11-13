@@ -91,7 +91,8 @@ if ! kubectl -n "$namespace" rollout status deployment/creatura-backend --timeou
   exit 1
 fi
 # Publish the already-tested artifact. This flag prevents any frontend rebuild.
-bash scripts/deploy-frontend.sh --skip-build
+# Windows app: exe built by the app CI (artifact downloaded into .deploy/desktop, optional).
+bash scripts/deploy-frontend.sh --skip-build --desktop-dir .deploy/desktop
 cdn="$(terraform -chdir=infra output -raw site_url)"
 cdn="${cdn%/}"
 distribution=$(terraform -chdir=infra output -raw cloudfront_distribution_id)

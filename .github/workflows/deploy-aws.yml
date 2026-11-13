@@ -135,6 +135,19 @@ jobs:
           name: frontend-dist-${{ env.APP_RUN_ID }}-${{ env.APP_RUN_ATTEMPT }}
           path: .deploy/frontend
 
+      # Windows app built by the app CI (job "desktop", optional there too): published next to the
+      # site under /telechargements/. Without it, the site is published and any exe online is kept.
+      - name: Download Windows app (optional)
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          repository: creatura2026/creatura-app
+          run-id: ${{ env.APP_RUN_ID }}
+          github-token: ${{ secrets.APP_REPO_TOKEN }}
+          pattern: creatura-windows-*
+          merge-multiple: true
+          path: .deploy/desktop
+
       - name: Verify exact frontend bytes and unpack
         run: |
           python scripts/ci/unpack-frontend.py \

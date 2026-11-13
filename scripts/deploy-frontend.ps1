@@ -40,6 +40,9 @@
 .PARAMETER SkipDesktop
   Neither build nor publish the Windows app.
 
+.PARAMETER DesktopDir
+  Exe files and latest.json already built elsewhere (e.g. the app CI artifact): published as is.
+
 .PARAMETER StageOnly
   Build and stage the site locally, print what would be uploaded, and stop. Nothing is sent to AWS.
 
@@ -58,6 +61,7 @@ param(
   [ValidateSet('mock', 'server')][string]$Api = 'mock',
   [switch]$SkipBuild,
   [switch]$SkipDesktop,
+  [string]$DesktopDir,
   [switch]$StageOnly
 )
 
@@ -234,8 +238,9 @@ foreach ($group in $groups) {
 # --- 4. Windows app -------------------------------------------------------------------
 
 if (-not $SkipDesktop) {
-  $ReleaseDir = Join-Path $AppPath 'apps\desktop\release'
-  if (-not $SkipBuild) {
+  $ReleaseDir = if ($DesktopDir) { $DesktopDir } else { Join-Path $AppPath 'apps\desktop\release' }
+  # Exe provided (-DesktopDir): already built, nothing to rebuild.
+  if (-not $SkipBuild -and -not $DesktopDir) {
     Push-Location $AppPath
     try {
       if ($Api -eq 'mock') {

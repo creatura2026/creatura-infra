@@ -26,6 +26,8 @@
 #   --skip-build            réutilise le contenu déjà présent dans .deploy/site (et l'exe déjà
 #                           construit dans creatura-app/apps/desktop/release)
 #   --skip-desktop          ne construit ni ne publie l'application Windows
+#   --desktop-dir DIR       exe et latest.json déjà construits ailleurs (ex. artefact de la CI de
+#                           l'app) : publiés tels quels, sans construction
 #   --stage-only            s'arrête avant le premier appel AWS
 set -euo pipefail
 # Lu en entier avant exécution (bloc { … }) : modifier ce fichier pendant qu'il tourne ne
@@ -42,6 +44,7 @@ SKIP_BUILD="no"
 STAGE_ONLY="no"
 MOCK="no"
 DESKTOP="yes"
+DESKTOP_DIR=""
 
 IMMUTABLE_CACHE="public, max-age=31536000, immutable"
 REVALIDATE_CACHE="no-cache"
@@ -58,8 +61,9 @@ while [ $# -gt 0 ]; do
     --mock) MOCK="yes" ;;
     --skip-build) SKIP_BUILD="yes" ;;
     --skip-desktop) DESKTOP="no" ;;
+    --desktop-dir) DESKTOP_DIR="${2:?}"; shift ;;
     --stage-only) STAGE_ONLY="yes" ;;
-    -h|--help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "option inconnue : $1" ;;
   esac
   shift
@@ -191,8 +195,9 @@ can_build_windows() {
 }
 
 if [ "$DESKTOP" = "yes" ]; then
-  RELEASE_DIR="$APP_PATH/apps/desktop/release"
-  if [ "$SKIP_BUILD" = "no" ]; then
+  RELEASE_DIR="${DESKTOP_DIR:-$APP_PATH/apps/desktop/release}"
+  # Exe fourni (--desktop-dir) : déjà construit, rien à reconstruire.
+  if [ "$SKIP_BUILD" = "no" ] && [ -z "$DESKTOP_DIR" ]; then
     if can_build_windows; then
       if [ "$MOCK" = "yes" ]; then
         say "Application Windows (API simulée)"
