@@ -255,17 +255,21 @@ if (-not $SkipDesktop) {
   }
   $manifest = Join-Path $ReleaseDir 'latest.json'
   if (-not (Test-Path $manifest)) {
-    throw "latest.json is missing from $ReleaseDir. Build the exe (pnpm desktop in creatura-app) or pass -SkipDesktop."
+    # No exe built (e.g. CI with -SkipBuild: the artifact only holds the front, the exe comes from
+    # another job). The site is still published; an exe already online, if any, is kept.
+    Write-Warning "Windows app not published: latest.json is missing from $ReleaseDir. Build the exe (pnpm desktop in creatura-app) to offer it."
   }
-  Write-Host "==> Uploading the Windows app to s3://$Bucket/telechargements/" -ForegroundColor Cyan
-  # The exe files first: latest.json must never point to a file that is not uploaded yet.
-  Invoke-Native aws @('s3', 'cp', $ReleaseDir, "s3://$Bucket/telechargements/", '--recursive', '--only-show-errors',
-    '--exclude', '*', '--include', 'Creatura-*.exe',
-    '--content-type', 'application/vnd.microsoft.portable-executable', '--cache-control', $RevalidateCache)
-  Invoke-Native aws @('s3', 'cp', $manifest, "s3://$Bucket/telechargements/latest.json", '--only-show-errors',
-    '--content-type', 'application/json', '--cache-control', $RevalidateCache)
-  $version = (Get-Content $manifest -Raw | ConvertFrom-Json).version
-  Write-Host "  uploaded Windows app $version"
+  else {
+    Write-Host "==> Uploading the Windows app to s3://$Bucket/telechargements/" -ForegroundColor Cyan
+    # The exe files first: latest.json must never point to a file that is not uploaded yet.
+    Invoke-Native aws @('s3', 'cp', $ReleaseDir, "s3://$Bucket/telechargements/", '--recursive', '--only-show-errors',
+      '--exclude', '*', '--include', 'Creatura-*.exe',
+      '--content-type', 'application/vnd.microsoft.portable-executable', '--cache-control', $RevalidateCache)
+    Invoke-Native aws @('s3', 'cp', $manifest, "s3://$Bucket/telechargements/latest.json", '--only-show-errors',
+      '--content-type', 'application/json', '--cache-control', $RevalidateCache)
+    $version = (Get-Content $manifest -Raw | ConvertFrom-Json).version
+    Write-Host "  uploaded Windows app $version"
+  }
 }
 
 

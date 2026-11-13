@@ -220,7 +220,10 @@ if [ "$DESKTOP" = "yes" ]; then
       --content-type "application/json" --cache-control "$REVALIDATE_CACHE"
     echo "  envoyé : version $(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$RELEASE_DIR/latest.json" | head -n 1)"
   elif [ -n "$RELEASE_DIR" ]; then
-    die "latest.json absent de $RELEASE_DIR : construire l'exe (pnpm desktop dans creatura-app) ou passer --skip-desktop."
+    # Pas d'exe construit (ex. CI avec --skip-build : l'artefact ne contient que le front, l'exe vient
+    # d'un autre job). Le site est publié quand même ; l'exe déjà en ligne, s'il y en a un, est gardé.
+    printf '\nApplication Windows non publiée : latest.json absent de %s.\n' "$RELEASE_DIR"
+    printf 'Le site est publié ; construire l exe (pnpm desktop dans creatura-app) pour le proposer.\n'
   fi
 fi
 
