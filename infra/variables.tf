@@ -32,3 +32,25 @@ variable "cloudfront_price_class" {
     error_message = "cloudfront_price_class must be PriceClass_100, PriceClass_200, or PriceClass_All."
   }
 }
+variable "custom_domain" {
+  description = "Domain served by the distribution (output domain_name of dns/). Empty: the CloudFront hostname only."
+  type        = string
+  default     = ""
+}
+
+variable "certificate_arn" {
+  description = "ACM certificate in us-east-1 for custom_domain, already ISSUED (output certificate_arn of dns/)."
+  type        = string
+  default     = ""
+}
+
+variable "route53_zone_id" {
+  description = "Route 53 zone of custom_domain (output zone_id of dns/): ALIAS records to the distribution."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = (var.custom_domain == "") == (var.certificate_arn == "") && (var.custom_domain == "") == (var.route53_zone_id == "")
+    error_message = "custom_domain, certificate_arn and route53_zone_id are set together (outputs of dns/), or all left empty."
+  }
+}
