@@ -72,6 +72,21 @@ EKS_VARS=(
 )
 say "Compte $ACCOUNT, région $REGION, accès au cluster depuis $IP"
 
+# Domaine personnalisé (stack permanente dns/, facultative) : utilisé dès que son certificat est validé.
+DOMAIN_VARS=(-var "custom_domain=" -var "certificate_arn=" -var "route53_zone_id=")
+DOMAIN=""
+if [ -f "$ROOT/dns/terraform.tfstate" ]; then
+  cert="$(tf dns output -raw certificate_arn 2>/dev/null || true)"
+  status="$(aws acm describe-certificate --region us-east-1 --certificate-arn "$cert" --query Certificate.Status --output text 2>/dev/null || true)"
+  if [ "$status" = "ISSUED" ]; then
+    DOMAIN="$(tf dns output -raw domain_name)"
+    DOMAIN_VARS=(-var "custom_domain=$DOMAIN" -var "certificate_arn=$cert" -var "route53_zone_id=$(tf dns output -raw zone_id)")
+    say "Domaine $DOMAIN (certificat validé)"
+  else
+    say "Domaine de dns/ ignoré : certificat ${status:-introuvable} (délégation NS faite chez le registrar ?)"
+  fi
+fi
+
 # --- 1. État Terraform -------------------------------------------------------------
 say "Bucket d'état $STATE_BUCKET"
 tf bootstrap init -input=false >"$LOGS/bootstrap.log" 2>&1 || { tail_log "$LOGS/bootstrap.log"; die "init bootstrap/"; }
@@ -104,7 +119,7 @@ API_ORIGIN_NOW="$(tf eks output -raw api_origin_domain_name 2>/dev/null || true)
 case "$API_ORIGIN_NOW" in *.elb.amazonaws.com) ;; *) API_ORIGIN_NOW="" ;; esac
 {
   tf infra apply -input=false -auto-approve -var "aws_region=$REGION" -var "api_origin_domain_name=$API_ORIGIN_NOW" \
-    && "$ROOT/scripts/deploy-frontend.sh" --app-path "$APP_PATH"
+    "${DOMAIN_VARS[@]}" && "$ROOT/scripts/deploy-frontend.sh" --app-path "$APP_PATH"
 } >"$LOGS/infra.log" 2>&1 &
 pid_infra=$!
 
@@ -149,7 +164,7 @@ fi
 kubectl -n "$NAMESPACE" logs job/creatura-db-schema | grep '\[creatura\]' | sed 's/^/  /'
 kubectl -n "$NAMESPACE" delete secret creatura-db-admin >/dev/null   # le mot de passe principal ne reste pas dans le cluster
 
-CDN_URL="https://$(tf infra output -raw cloudfront_domain_name)"
+CDN_URL="$(tf infra output -raw site_url)"; CDN_URL="${CDN_URL%/}"   # domaine personnalisé s'il y en a un
 if kubectl -n "$NAMESPACE" get secret creatura-backend >/dev/null 2>&1; then
   say "Secret du back existant conservé"
   # Le domaine CloudFront change à chaque re-création du CDN : on le remet à jour.
@@ -196,17 +211,23 @@ done
 API_ORIGIN="$(tf eks output -raw api_origin_domain_name)"
 say "Route /api/* vers $API_ORIGIN"
 tf infra apply -input=false -auto-approve -var "aws_region=$REGION" -var "api_origin_domain_name=$API_ORIGIN" \
-  >"$LOGS/api-route.log" 2>&1 || { tail_log "$LOGS/api-route.log"; die "route /api/*"; }
+  "${DOMAIN_VARS[@]}" >"$LOGS/api-route.log" 2>&1 || { tail_log "$LOGS/api-route.log"; die "route /api/*"; }
 
 say "Contrôle de bout en bout via CloudFront"
+# Par le nom CloudFront : toujours résolu, contrairement à un domaine personnalisé tout juste créé
+# (le cache DNS du poste peut garder un « nom inconnu » quelques minutes).
+CF_URL="https://$(tf infra output -raw cloudfront_domain_name)"
 health=""
 for _ in $(seq 1 30); do
-  health="$(curl -fsS -m 10 "$CDN_URL/api/v1/health" 2>/dev/null || true)"
+  health="$(curl -fsS -m 10 "$CF_URL/api/v1/health" 2>/dev/null || true)"
   case "$health" in *'"database":"ok"'*) break ;; esac
   sleep 10
 done
-case "$health" in *'"database":"ok"'*) ;; *) die "l'API ne répond pas via CloudFront ($CDN_URL/api/v1/health)." ;; esac
-front="$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$CDN_URL/")"
+case "$health" in *'"database":"ok"'*) ;; *) die "l'API ne répond pas via CloudFront ($CF_URL/api/v1/health)." ;; esac
+front="$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$CF_URL/")"
+if [ -n "$DOMAIN" ] && ! curl -fsS -m 10 -o /dev/null "$CDN_URL/api/v1/health" 2>/dev/null; then
+  printf '\n  Attention : %s ne répond pas encore depuis ce poste (cache DNS). En attendant : %s\n' "$CDN_URL" "$CF_URL"
+fi
 
 cat <<EOF
 

@@ -35,8 +35,10 @@ resource "aws_cloudfront_function" "spa_rewrite" {
 }
 
 resource "aws_cloudfront_distribution" "sprites" {
-  enabled             = true
-  is_ipv6_enabled     = true
+  enabled         = true
+  is_ipv6_enabled = true
+  # Custom domain (dns/ stack): CloudFront only answers for names declared here.
+  aliases             = var.custom_domain == "" ? [] : [var.custom_domain]
   default_root_object = "index.html"
   price_class         = var.cloudfront_price_class
   comment             = "Creatura web apps (player PWA, admin dashboard) and sprites"
@@ -119,6 +121,24 @@ resource "aws_cloudfront_distribution" "sprites" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    cloudfront_default_certificate = var.certificate_arn == ""
+    acm_certificate_arn            = var.certificate_arn == "" ? null : var.certificate_arn
+    ssl_support_method             = var.certificate_arn == "" ? null : "sni-only"
+    minimum_protocol_version       = var.certificate_arn == "" ? "TLSv1" : "TLSv1.2_2021"
+  }
+}
+
+# The domain follows the distribution: ALIAS records are rewritten on every re-creation.
+resource "aws_route53_record" "site" {
+  for_each = var.route53_zone_id == "" ? toset([]) : toset(["A", "AAAA"])
+
+  zone_id = var.route53_zone_id
+  name    = var.custom_domain
+  type    = each.key
+
+  alias {
+    name                   = aws_cloudfront_distribution.sprites.domain_name
+    zone_id                = aws_cloudfront_distribution.sprites.hosted_zone_id
+    evaluate_target_health = false
   }
 }
