@@ -86,8 +86,4 @@ The application bucket has `force_destroy` enabled: the destroy empties it, old 
 
 ## GitHub Actions
 
-`.github/workflows/terraform.yml` plans on pull requests and applies on `main`. `.github/workflows/deploy-frontend.yml` publishes a frontend artifact built by the app repository CI. Both authenticate with the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` repository secrets, because IAM roles and OIDC cannot be created in this AWS organization.
-
-Repository variables: `AWS_REGION` (`eu-north-1`), `TF_STATE_BUCKET`, `TF_STATE_KEY`, `TF_STATE_REGION`, `APP_REPOSITORY`, `APP_PRODUCTION_BRANCH`, and optionally `APP_WORKFLOW_ID` and `API_ORIGIN_DOMAIN_NAME`. Without `API_ORIGIN_DOMAIN_NAME`, an apply on `main` removes the `/api/*` route. Secret `APP_REPO_TOKEN` gives read access to the app repository artifacts.
-
-The frontend workflow is not usable yet: the app repository has no CI that builds and uploads the artifact. The artifact must have the layout described above (player at the root, admin under `admin/`).
+La CI/CD automatique depuis `develop` est décrite dans le [README principal](../README.md). Le workflow unifié `deploy-aws.yml` remplace les anciens workflows indépendants de Terraform, frontend et backend. Il utilise les builds testés du dépôt app, sans rebuild, et reçoit l'origine API directement de l'état EKS.

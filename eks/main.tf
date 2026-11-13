@@ -29,8 +29,9 @@ variable "kubernetes_version" {
   type        = string
 }
 variable "deployment_principal_arn" {
-  description = "ARN IAM utilisateur ou rôle utilisé par la CI de déploiement."
+  description = "Identité de déploiement limitée au namespace (facultative)."
   type        = string
+  default     = null
 }
 variable "endpoint_public_access_cidrs" {
   description = "CIDR autorisés sur l'API EKS (runner et administrateur). Pas d'accès public implicite."
@@ -45,32 +46,32 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 module "vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
-  version = "5.21.0"
-  name    = var.cluster_name
-  cidr    = "10.51.0.0/16"
-  azs     = slice(data.aws_availability_zones.available.names, 0, 2)
-  private_subnets = ["10.51.1.0/24", "10.51.2.0/24"]
-  public_subnets  = ["10.51.101.0/24", "10.51.102.0/24"]
-  enable_nat_gateway = true
-  single_nat_gateway = true
+  source               = "terraform-aws-modules/vpc/aws"
+  version              = "5.21.0"
+  name                 = var.cluster_name
+  cidr                 = "10.51.0.0/16"
+  azs                  = slice(data.aws_availability_zones.available.names, 0, 2)
+  private_subnets      = ["10.51.1.0/24", "10.51.2.0/24"]
+  public_subnets       = ["10.51.101.0/24", "10.51.102.0/24"]
+  enable_nat_gateway   = true
+  single_nat_gateway   = true
   enable_dns_hostnames = true
-  public_subnet_tags  = { "kubernetes.io/role/elb" = "1" }
-  private_subnet_tags = { "kubernetes.io/role/internal-elb" = "1" }
+  public_subnet_tags   = { "kubernetes.io/role/elb" = "1" }
+  private_subnet_tags  = { "kubernetes.io/role/internal-elb" = "1" }
 }
 module "eks" {
-  source  = "terraform-aws-modules/eks/aws"
-  version = "20.37.2"
-  cluster_name    = var.cluster_name
-  cluster_version = var.kubernetes_version
-  cluster_endpoint_public_access       = true
-  cluster_endpoint_private_access      = true
-  cluster_endpoint_public_access_cidrs = var.endpoint_public_access_cidrs
+  source                                   = "terraform-aws-modules/eks/aws"
+  version                                  = "20.37.2"
+  cluster_name                             = var.cluster_name
+  cluster_version                          = var.kubernetes_version
+  cluster_endpoint_public_access           = true
+  cluster_endpoint_private_access          = true
+  cluster_endpoint_public_access_cidrs     = var.endpoint_public_access_cidrs
   enable_cluster_creator_admin_permissions = false
-  authentication_mode = "API"
-  enable_irsa = false
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnets
+  authentication_mode                      = "API"
+  enable_irsa                              = false
+  vpc_id                                   = module.vpc.vpc_id
+  subnet_ids                               = module.vpc.private_subnets
   cluster_addons = {
     coredns    = {}
     kube-proxy = {}
@@ -99,7 +100,7 @@ module "eks" {
       desired_size   = 2
     }
   }
-  access_entries = {
+  access_entries = var.deployment_principal_arn == null || var.deployment_principal_arn == var.administrator_principal_arn ? {} : {
     deployment = {
       principal_arn = var.deployment_principal_arn
       policy_associations = {
@@ -131,3 +132,23 @@ resource "aws_eks_access_policy_association" "administrator" {
 output "cluster_name" { value = module.eks.cluster_name }
 output "vpc_id" { value = module.vpc.vpc_id }
 output "node_security_group_id" { value = module.eks.node_security_group_id }
+
+# La CI de provisioning doit initialiser namespace, secrets et Job SQL.
+# Aucun doublon quand les clés CI et le poste utilisent le même utilisateur IAM.
+variable "ci_administrator_principal_arn" {
+  description = "Identité du workflow de provisioning, si différente de l'administrateur."
+  type        = string
+  default     = null
+}
+resource "aws_eks_access_entry" "ci_administrator" {
+  count         = var.ci_administrator_principal_arn != null && var.ci_administrator_principal_arn != var.administrator_principal_arn ? 1 : 0
+  cluster_name  = module.eks.cluster_name
+  principal_arn = var.ci_administrator_principal_arn
+}
+resource "aws_eks_access_policy_association" "ci_administrator" {
+  count         = length(aws_eks_access_entry.ci_administrator)
+  cluster_name  = module.eks.cluster_name
+  principal_arn = aws_eks_access_entry.ci_administrator[0].principal_arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+  access_scope { type = "cluster" }
+}
