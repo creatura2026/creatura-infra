@@ -31,6 +31,22 @@ The route is never cached, accepts every HTTP method and WebSocket upgrades, and
 
 Caching: `assets/*`, `admin/assets/*` and `sprites/*` are cached for a long time (hashed or immutable files). Everything else (`index.html`, `sw.js`, `manifest.webmanifest`, icons) is never cached at the edge.
 
+## Web application firewall (`waf.tf`)
+
+AWS WAF in front of the CloudFront distribution protects the player app, the admin dashboard and the API with one web ACL. The API load balancer already accepts CloudFront only, so the WAF cannot be bypassed. It is **disabled by default** (`waf_enabled = false`) because WAF is not in the AWS Free Tier, so the CI apply on `main` does not create it; `scripts/aws-up.sh` **enables it in block mode** (`--no-waf` to skip it).
+
+| Rule | Protects against |
+|---|---|
+| `limite-auth` | More than `waf_login_rate_limit` requests (default 100) per IP per 5 minutes on `/api/v1/auth/*` (password guessing) |
+| `AWSManagedRulesAmazonIpReputationList` | Addresses known for bots and attacks |
+| `AWSManagedRulesCommonRuleSet` | Common web attacks (OWASP) |
+| `AWSManagedRulesKnownBadInputsRuleSet` | Known exploit payloads |
+| `AWSManagedRulesSQLiRuleSet` | SQL injection |
+
+Roll-out: start with `waf_mode = "count"` (rules only count matches), check the sampled requests and the `aws-waf-logs-creatura` log group (us-east-1) while playing normally, then switch to `waf_mode = "block"` (the mode used by `scripts/aws-up.sh`).
+
+Check in block mode: `curl -s -o /dev/null -w '%{http_code}' "https://<domain>/api/v1/health?id=1%27%20OR%20%271%27=%271"` returns `403`, while `/api/v1/health` returns `200`.
+
 ## Region
 
 Use `eu-north-1`. The organization SCP `p-0vevikxq` explicitly denies `eu-west-1` and `eu-west-3`. CloudFront itself is a global service; only the bucket lives in `eu-north-1`.

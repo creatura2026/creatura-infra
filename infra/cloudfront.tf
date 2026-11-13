@@ -42,6 +42,8 @@ resource "aws_cloudfront_distribution" "sprites" {
   default_root_object = "index.html"
   price_class         = var.cloudfront_price_class
   comment             = "Creatura web apps (player PWA, admin dashboard) and sprites"
+  # AWS WAF (waf.tf), when waf_enabled = true.
+  web_acl_id = try(aws_wafv2_web_acl.creatura[0].arn, null)
 
   origin {
     domain_name              = aws_s3_bucket.sprites.bucket_regional_domain_name

@@ -14,15 +14,16 @@
 # Ré-exécutable : chaque étape ne crée que ce qui manque. Le Secret du back (clé JWT,
 # mot de passe admin) est conservé d'une exécution à l'autre tant que le cluster existe.
 # Durée : 20 à 25 minutes au premier lancement, surtout l'attente d'EKS et de RDS.
-# Coût : environ 0,30 $ de l'heure tant que l'environnement existe. Tout détruire :
-# scripts/aws-down.sh.
+# Coût : environ 0,30 $ de l'heure tant que l'environnement existe, plus le pare-feu WAF
+# (environ 10 $ par mois, au prorata). Tout détruire : scripts/aws-down.sh.
 #
 # Prérequis : identité AWS avec droits administrateur (variable AWS_PROFILE ou --profile),
 # aws, terraform, kubectl, python3, git, zip, pnpm ; creatura-app à côté de ce dépôt ;
 # eks/terraform.tfvars (voir eks/terraform.tfvars.example). L'IP publique du poste est
 # relue à chaque lancement pour l'accès à l'API du cluster.
 #
-# Options : --profile NOM, --app-path DIR, --skip-images (réutilise les dernières images ECR).
+# Options : --profile NOM, --app-path DIR, --skip-images (réutilise les dernières images ECR),
+#           --no-waf (pas de pare-feu WAF devant CloudFront ; il est actif et bloquant par défaut).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -30,6 +31,7 @@ APP_PATH="$ROOT/../creatura-app"
 REGION="eu-north-1"
 NAMESPACE="creatura"
 SKIP_IMAGES="no"
+WAF="yes"
 WORK="$ROOT/.deploy"
 LOGS="$WORK/logs"
 export KUBECONFIG="$WORK/kubeconfig-eks"   # jamais le ~/.kube/config de l'utilisateur
@@ -40,6 +42,7 @@ while [ $# -gt 0 ]; do
     --profile) export AWS_PROFILE="${2:?}"; shift ;;
     --app-path) APP_PATH="${2:?}"; shift ;;
     --skip-images) SKIP_IMAGES="yes" ;;
+    --no-waf) WAF="no" ;;
     -h|--help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'Option inconnue : %s\n' "$1" >&2; exit 1 ;;
   esac
@@ -71,6 +74,10 @@ EKS_VARS=(
   -var "create_image_builder=true"
 )
 say "Compte $ACCOUNT, région $REGION, accès au cluster depuis $IP"
+
+# Pare-feu WAF devant CloudFront (infra/waf.tf), en mode bloquant sauf --no-waf.
+WAF_VARS=(-var "waf_enabled=true" -var "waf_mode=block")
+[ "$WAF" = "yes" ] || WAF_VARS=(-var "waf_enabled=false")
 
 # Domaine personnalisé (stack permanente dns/, facultative) : utilisé dès que son certificat est validé.
 DOMAIN_VARS=(-var "custom_domain=" -var "certificate_arn=" -var "route53_zone_id=")
@@ -119,7 +126,7 @@ API_ORIGIN_NOW="$(tf eks output -raw api_origin_domain_name 2>/dev/null || true)
 case "$API_ORIGIN_NOW" in *.elb.amazonaws.com) ;; *) API_ORIGIN_NOW="" ;; esac
 {
   tf infra apply -input=false -auto-approve -var "aws_region=$REGION" -var "api_origin_domain_name=$API_ORIGIN_NOW" \
-    "${DOMAIN_VARS[@]}" && "$ROOT/scripts/deploy-frontend.sh" --app-path "$APP_PATH"
+    "${DOMAIN_VARS[@]}" "${WAF_VARS[@]}" && "$ROOT/scripts/deploy-frontend.sh" --app-path "$APP_PATH"
 } >"$LOGS/infra.log" 2>&1 &
 pid_infra=$!
 
@@ -211,7 +218,7 @@ done
 API_ORIGIN="$(tf eks output -raw api_origin_domain_name)"
 say "Route /api/* vers $API_ORIGIN"
 tf infra apply -input=false -auto-approve -var "aws_region=$REGION" -var "api_origin_domain_name=$API_ORIGIN" \
-  "${DOMAIN_VARS[@]}" >"$LOGS/api-route.log" 2>&1 || { tail_log "$LOGS/api-route.log"; die "route /api/*"; }
+  "${DOMAIN_VARS[@]}" "${WAF_VARS[@]}" >"$LOGS/api-route.log" 2>&1 || { tail_log "$LOGS/api-route.log"; die "route /api/*"; }
 
 say "Contrôle de bout en bout via CloudFront"
 # Par le nom CloudFront : toujours résolu, contrairement à un domaine personnalisé tout juste créé
@@ -240,5 +247,5 @@ cat <<EOF
   Mot de passe admin :
     KUBECONFIG=$KUBECONFIG kubectl -n $NAMESPACE get secret creatura-backend -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d
 
-  Coût : environ 0,30 \$ de l'heure. Tout détruire : scripts/aws-down.sh
+  Coût : environ 0,30 \$ de l'heure (+ WAF). Tout détruire : scripts/aws-down.sh
 EOF
