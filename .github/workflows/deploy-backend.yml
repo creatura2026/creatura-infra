@@ -1,0 +1,67 @@
+name: Deploy backend to EKS
+on:
+  workflow_dispatch:
+    inputs:
+      image_digest:
+        description: 'Existing GHCR image digest (sha256:...) produced by creatura-app CI'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: creatura-backend-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+      IMAGE_DIGEST: ${{ inputs.image_digest }}
+      BACKEND_PORT: ${{ vars.BACKEND_PORT || '8000' }}
+      HEALTH_PATH: ${{ vars.BACKEND_HEALTH_PATH || '/api/v1/health' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install renderer dependency
+        run: python -m pip install PyYAML==6.0.2
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Resolve existing image and cluster
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AWS_REGION"
+          test -n "$EKS_CLUSTER_NAME"
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          repository_uri=ghcr.io/creatura2026/creatura-backend
+          python scripts/render-backend.py --image "$repository_uri@$IMAGE_DIGEST" --port "$BACKEND_PORT" --health-path "$HEALTH_PATH" > /tmp/backend.yaml
+          version=$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --query 'cluster.version' --output text)
+          [[ "$version" =~ ^1\.[0-9]+$ ]]
+          echo "KUBECTL_VERSION=$version" >> "$GITHUB_ENV"
+          aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v${{ env.KUBECTL_VERSION }}.0
+      - name: Validate prerequisites and manifests
+        run: |
+          set -euo pipefail
+          kubectl get namespace creatura
+          kubectl -n creatura get secret creatura-backend -o name
+          kubectl apply --dry-run=server -f /tmp/backend.yaml
+      - name: Deploy existing image
+        run: |
+          set -euo pipefail
+          kubectl apply -f /tmp/backend.yaml
+          kubectl -n creatura rollout status deployment/creatura-backend --timeout=330s
+      - name: Diagnose failed rollout
+        if: failure()
+        run: |
+          kubectl -n creatura get pods -l app=creatura-backend -o wide
+          kubectl -n creatura get events --sort-by=.lastTimestamp | tail -30

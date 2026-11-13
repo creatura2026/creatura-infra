@@ -1,0 +1,74 @@
+# Applique le schéma et le catalogue sur la base (image creatura-db, script appliquer.sh),
+# puis crée l'utilisateur du back. Remplace le bastion : le Job tourne dans le cluster,
+# donc dans le VPC de la base. Ré-exécutable ; à relancer après chaque évolution du schéma.
+#
+#   kubectl -n creatura delete job creatura-db-schema --ignore-not-found
+#   kubectl apply -f k8s/db/schema-job.yaml
+#   kubectl -n creatura wait --for=condition=complete job/creatura-db-schema --timeout=180s
+#
+# Connexion : Secret creatura-db-admin (PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD,
+# PGSSLMODE), créé à partir de Secrets Manager puis supprimé après le Job (eks/README.md).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: creatura-db-schema
+  namespace: creatura
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999 # utilisateur postgres de l'image
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: schema
+          # Publiée par la CI de creatura-app ; préférer un tag sha-… pour une livraison.
+          image: ghcr.io/creatura2026/creatura-db:develop
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: creatura-db-admin
+          env:
+            # Jamais de comptes de démo sur une base partagée (mots de passe publics).
+            - name: CREATURA_DEMO
+              value: "false"
+            - name: APP_DB_USER
+              value: creatura_back
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          command:
+            - sh
+            - -ec
+            - |
+              /db/scripts/appliquer.sh
+              echo "[creatura] Utilisateur du back : $APP_DB_USER"
+              psql -v ON_ERROR_STOP=1 --quiet --no-psqlrc -v app_user="$APP_DB_USER" <<'SQL'
+              SELECT format('CREATE ROLE %I LOGIN', :'app_user')
+               WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'app_user') \gexec
+              -- Sur RDS, rds_iam remplace le mot de passe par un jeton IAM. Absent d'un PostgreSQL local.
+              SELECT format('GRANT rds_iam TO %I', :'app_user')
+               WHERE EXISTS (SELECT FROM pg_roles WHERE rolname = 'rds_iam') \gexec
+              -- Droits sur les données seulement : le schéma reste au compte principal.
+              GRANT USAGE ON SCHEMA public TO :"app_user";
+              GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO :"app_user";
+              GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO :"app_user";
+              ALTER DEFAULT PRIVILEGES IN SCHEMA public
+                GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"app_user";
+              ALTER DEFAULT PRIVILEGES IN SCHEMA public
+                GRANT USAGE, SELECT ON SEQUENCES TO :"app_user";
+              SQL
+              echo "[creatura] Terminé."
