@@ -37,13 +37,13 @@ variable "db_engine_version" {
 }
 
 variable "db_backup_retention_days" {
-  description = "Durée de conservation des sauvegardes automatiques, en jours (0 = désactivées, 35 au plus). Gratuit jusqu'à la taille de la base."
+  description = "Duree de conservation des sauvegardes automatiques, en jours (0 = desactivees)."
   type        = number
-  default     = 7
+  default     = 1
 
   validation {
     condition     = var.db_backup_retention_days >= 0 && var.db_backup_retention_days <= 35
-    error_message = "db_backup_retention_days doit être compris entre 0 et 35."
+    error_message = "db_backup_retention_days doit etre compris entre 0 et 35."
   }
 }
 
