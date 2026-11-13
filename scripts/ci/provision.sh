@@ -18,4 +18,6 @@ PY
 }
 plan_and_apply eks
 origin=$(terraform -chdir=eks output -raw api_origin_domain_name)
-plan_and_apply infra "-var=aws_region=$AWS_REGION" "-var=api_origin_domain_name=$origin"
+# WAF : variables de dépôt WAF_ENABLED (défaut false) et WAF_MODE (défaut block).
+plan_and_apply infra "-var=aws_region=$AWS_REGION" "-var=api_origin_domain_name=$origin" \
+  "-var=waf_enabled=${WAF_ENABLED:-false}" "-var=waf_mode=${WAF_MODE:-block}"

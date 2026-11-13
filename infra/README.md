@@ -33,7 +33,7 @@ Caching: `assets/*`, `admin/assets/*` and `sprites/*` are cached for a long time
 
 ## Web application firewall (`waf.tf`)
 
-AWS WAF in front of the CloudFront distribution protects the player app, the admin dashboard and the API with one web ACL. The API load balancer already accepts CloudFront only, so the WAF cannot be bypassed. It is **disabled by default** (`waf_enabled = false`) because WAF is not in the AWS Free Tier, so the CI apply on `main` does not create it; `scripts/aws-up.sh` **enables it in block mode** (`--no-waf` to skip it).
+AWS WAF in front of the CloudFront distribution protects the player app, the admin dashboard and the API with one web ACL. The API load balancer already accepts CloudFront only, so the WAF cannot be bypassed. It is **disabled by default** (`waf_enabled = false`) because WAF is not in the AWS Free Tier, so the CI deployment does not create it unless the repository variable `WAF_ENABLED` is `true` (`WAF_MODE`: `block` by default, or `count`); `scripts/aws-up.sh` **enables it in block mode** (`--no-waf` to skip it). Before enabling it in CI, check that the CI identity may manage `wafv2` and CloudWatch Logs in us-east-1.
 
 | Rule | Protects against |
 |---|---|

@@ -43,6 +43,8 @@ Configurer dans l'environnement `production`. Ne pas conserver d'anciennes valeu
 | `EKS_ADMIN_PRINCIPAL_ARN` | ARN IAM administrateur ; vide = identité IAM de la CI |
 | `EKS_ADMIN_CIDRS` | Tableau JSON des CIDR administrateur, ex. `["203.0.113.10/32"]` ; défaut `[]` |
 | `GHCR_USERNAME` | Compte GitHub qui peut lire les packages privés |
+| `WAF_ENABLED` | `true` pour créer le pare-feu WAF devant CloudFront (payant, voir `infra/README.md`) ; défaut `false` |
+| `WAF_MODE` | `block` (défaut) ou `count` (observation sans blocage) |
 
 | Secret | Usage |
 |---|---|
