@@ -1,0 +1,12 @@
+# Cluster kind "creatura" : un seul nœud, le NodePort 30080 du back est publié
+# sur 127.0.0.1:30080 du poste.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: creatura
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 30080
+        listenAddress: 127.0.0.1
+        protocol: TCP

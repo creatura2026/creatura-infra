@@ -1,10 +1,12 @@
-"""Outils pour les sprites : planche-contact numérotée et redimensionnement uniforme.
+"""Outils pour les sprites : planche-contact numérotée, redimensionnement uniforme, détourage.
 
     python sprites.py sheet  <dossier> <sortie.png>
     python sprites.py resize <dossier_source> <dossier_dest> [--size 128] [--margin 4]
+    python sprites.py cutout <image.png> <sortie.png> [--size 128] [--margin 4] [--tolerance 40]
 """
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -54,6 +56,39 @@ def resize(src, dst, size, margin):
         print(f"{f.name:<34} contenu {img.width}x{img.height} -> {sprite.width}x{sprite.height}")
 
 
+def cutout(src, dst, size, margin, tolerance):
+    """Image opaque sur fond uni (ex. dessin 512x512 sur fond blanc) -> sprite transparent.
+
+    Le fond est la couleur du coin haut gauche ; il est retiré par remplissage depuis les
+    bords de l'image, donc les zones claires entourées par le contour (yeux, dents) restent.
+    La réduction se fait par un facteur entier (512 -> 128 : divisé par 4) pour garder
+    les pixels réguliers, puis le sprite est centré comme ceux de `resize`.
+    """
+    img = Image.open(src).convert("RGBA")
+    rgb = img.convert("RGB")
+    marker = (1, 254, 3)  # couleur témoin, absente du dessin
+    assert marker not in {c for _, c in rgb.getcolors(1 << 24)}, "couleur témoin présente dans l'image"
+    w, h = rgb.size
+    border = [(x, y) for x in range(w) for y in (0, h - 1)] + [(x, y) for y in range(h) for x in (0, w - 1)]
+    for xy in border:
+        if rgb.getpixel(xy) != marker:
+            ImageDraw.floodfill(rgb, xy, marker, thresh=tolerance)
+    mask = Image.new("L", (w, h), 255)
+    mask.putdata([0 if px == marker else 255 for px in rgb.getdata()])
+    img.putalpha(mask)
+
+    bbox = mask.getbbox()
+    img = img.crop(bbox)
+    factor = max(1, math.ceil(max(img.width, img.height) / (size - 2 * margin)))
+    small = (max(1, round(img.width / factor)), max(1, round(img.height / factor)))
+    # RGBa : alpha prémultiplié, pour que le fond retiré ne déteigne pas sur les bords.
+    sprite = img.convert("RGBa").resize(small, Image.BOX).convert("RGBA")
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    canvas.alpha_composite(sprite, ((size - sprite.width) // 2, (size - sprite.height) // 2))
+    canvas.save(dst)
+    print(f"{Path(src).name}: fond retiré, contenu {img.width}x{img.height} / {factor} -> {sprite.width}x{sprite.height}")
+
+
 def main():
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -66,10 +101,18 @@ def main():
     r.add_argument("dst")
     r.add_argument("--size", type=int, default=128)
     r.add_argument("--margin", type=int, default=4)
+    c = sub.add_parser("cutout")
+    c.add_argument("src")
+    c.add_argument("dst")
+    c.add_argument("--size", type=int, default=128)
+    c.add_argument("--margin", type=int, default=4)
+    c.add_argument("--tolerance", type=int, default=40, help="écart toléré avec la couleur du fond")
     a = p.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if a.cmd == "sheet":
         sheet(a.src, a.out, raw=a.raw)
+    elif a.cmd == "cutout":
+        cutout(a.src, a.dst, a.size, a.margin, a.tolerance)
     else:
         resize(a.src, a.dst, a.size, a.margin)
 

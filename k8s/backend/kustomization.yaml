@@ -1,0 +1,9 @@
+# Base réutilisée par l'overlay local (k8s/local).
+# Le déploiement EKS ne passe pas par Kustomize : scripts/render-backend.py lit ces
+# trois fichiers directement.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml

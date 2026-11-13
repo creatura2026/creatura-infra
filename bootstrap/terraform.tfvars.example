@@ -1,9 +1,4 @@
-aws_region          = "eu-west-3"
-github_organization = "creatura2026"
-github_repository   = "creatura-infra"
-github_plan_environment       = "terraform-plan"
-github_production_environment = "production"
+aws_region = "eu-north-1"
+# S3 bucket names are global across all AWS accounts: change it if it is already taken.
 state_bucket_name   = "creatura-infra-tfstate-prod"
 terraform_state_key = "creatura-infra/terraform.tfstate"
-# Optional. Leave empty when infra uses its default creatura-assets-* prefix.
-application_bucket_name = ""

@@ -16,6 +16,25 @@ data "aws_iam_policy_document" "cloudfront_s3_read" {
       values   = [aws_cloudfront_distribution.sprites.arn]
     }
   }
+
+  # Without s3:ListBucket, S3 answers 403 instead of 404 for a missing object.
+  statement {
+    sid       = "AllowCloudFrontListForNotFound"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.sprites.arn]
+
+    principals {
+      type        = "Service"
+      identifiers = ["cloudfront.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "AWS:SourceArn"
+      values   = [aws_cloudfront_distribution.sprites.arn]
+    }
+  }
 }
 
 resource "aws_s3_bucket_policy" "sprites" {

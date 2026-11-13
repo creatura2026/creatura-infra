@@ -1,7 +1,7 @@
 variable "aws_region" {
   description = "AWS region where the bucket is created."
   type        = string
-  default     = "eu-west-3"
+  default     = "eu-north-1"
 }
 
 variable "bucket_name" {
@@ -14,6 +14,12 @@ variable "object_prefix" {
   description = "Prefix used for uploaded object keys."
   type        = string
   default     = "sprites/"
+}
+
+variable "api_origin_domain_name" {
+  description = "DNS name of the backend load balancer (output api_origin_domain_name of the eks/ stack). Empty: CloudFront has no /api/* route."
+  type        = string
+  default     = ""
 }
 
 variable "cloudfront_price_class" {

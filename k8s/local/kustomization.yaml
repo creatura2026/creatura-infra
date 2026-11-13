@@ -1,0 +1,31 @@
+# Back sur un cluster local, avec sa propre base PostgreSQL dans le cluster.
+# Lancer avec scripts/k8s-local.sh up (construit les images puis applique cet overlay).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - ../backend
+images:
+  - name: IMAGE_REQUIRED
+    newName: creatura-backend
+    newTag: local
+patches:
+  - target:
+      kind: Deployment
+      name: creatura-backend
+    patch: |-
+      # La salle d'échange (WebSocket) est tenue en mémoire par le processus :
+      # deux répliques sépareraient les deux joueurs d'un même échange.
+      - op: replace
+        path: /spec/replicas
+        value: 1
+secretGenerator:
+  - name: creatura-backend
+    namespace: creatura
+    literals:
+      # Valeurs de développement, les mêmes que creatura-app/backend/compose.yaml.
+      - DATABASE_URL=postgres://creatura:creatura@creatura-db:5432/creatura
+      - JWT_SECRET=dev-only-secret-change-me-in-production-please-0123456789
+      - TIMEZONE=Europe/Paris
+      - CORS_ORIGINS=http://localhost:5173,http://localhost:5174
