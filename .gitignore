@@ -1,2 +1,6 @@
 # Local staging folder of scripts/deploy-frontend.ps1
 .deploy/
+
+# Python validation scripts
+__pycache__/
+*.pyc

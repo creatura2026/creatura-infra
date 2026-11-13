@@ -1,4 +1,6 @@
-# A51 — Création EKS et base RDS
+# EKS, RDS et API — procédures manuelles A52
+
+Pour la CI/CD automatique depuis `develop`, suivre le [README principal](../README.md). Les procédures ci-dessous concernent les opérations manuelles ; elles ne doivent pas être exécutées en parallèle de la CI.
 
 Stack séparée du CDN : VPC sur deux zones, nœuds privés, NAT unique, cluster EKS et deux nœuds x86 t3.medium, base PostgreSQL 16 sur RDS dans les sous-réseaux privés du même VPC, répartiteur de charge (ALB) réservé à CloudFront devant l'API, accès IAM de déploiement limité au namespace creatura et accès administrateur distinct. Cette stack crée des rôles IAM : elle doit être exécutée par une identité autorisée, contrairement à la stack CDN existante.
 
@@ -6,7 +8,7 @@ Coûts permanents : plan de contrôle EKS, EC2, disques, NAT, instance RDS, ALB 
 
 **En une commande** : `scripts/aws-up.sh` réalise toutes les étapes ci-dessous (et celles de `infra/`), et `scripts/aws-down.sh` détruit tout. Les étapes détaillées restent utiles pour comprendre ou reprendre une étape à la main.
 
-1. Copier terraform.tfvars.example vers terraform.tfvars et remplacer toutes les valeurs d'exemple. Choisir une version EKS en support standard disponible dans la région. Les deux identités IAM doivent exister et être différentes.
+1. Copier terraform.tfvars.example vers terraform.tfvars et remplacer toutes les valeurs d'exemple. Choisir une version EKS en support standard disponible dans la région. L’identité administrateur doit exister. L’identité de déploiement limitée est facultative (`null`) ; ne pas créer de doublon pour le même ARN.
 2. Initialiser avec le bucket d'état existant et une **clé distincte**, par exemple :
 
 ```sh

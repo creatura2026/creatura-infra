@@ -86,3 +86,7 @@ python sprites.py cutout drawing-512.png images/new_creature.png   # opaque draw
 ## Outdated Documents
 
 `summary.md` and `audit-report.md` describe the first design (region `eu-west-3`, GitHub OIDC, three IAM roles). They no longer match the code.
+
+## CI/CD develop (current)
+
+`checks.yml` validates pull requests without AWS credentials. `deploy-aws.yml` automatically deploys develop after checks and consumes the verified app CI release. Follow the root README for current secrets, prerequisites and state keys. The legacy separate deployment workflows have been removed; do not reintroduce parallel writers. No OIDC required. The eks stack does create IAM resources and therefore needs an authorized identity. App builds occur in creatura-app only; EKS pulls the existing GHCR images directly by digest using the dedicated ghcr-pull Secret; no ECR mirror or rebuild. Frontend archives are tied to the run/attempt and checked by SHA-256. Bootstrap remains a one-time manual prerequisite.
