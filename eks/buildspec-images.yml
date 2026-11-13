@@ -1,0 +1,27 @@
+# Buildspec du projet CodeBuild de codebuild.tf : construit le Dockerfile à la racine de
+# l'archive source et pousse l'image dans ECR. Variables fournies au lancement :
+#   REGISTRY  <compte>.dkr.ecr.<région>.amazonaws.com
+#   IMAGE     creatura-backend ou creatura-db (nom du dépôt ECR)
+#   TAG       étiquette de l'image
+version: 0.2
+
+env:
+  variables:
+    # Le Dockerfile du back utilise RUN --mount=type=cache (BuildKit).
+    DOCKER_BUILDKIT: "1"
+
+phases:
+  pre_build:
+    commands:
+      - echo "Image ${REGISTRY}/${IMAGE}:${TAG}"
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+  build:
+    commands:
+      - docker build --platform linux/amd64 --tag "${REGISTRY}/${IMAGE}:${TAG}" .
+      # Dans la phase build : rien n'est poussé si la construction échoue.
+      - docker push "${REGISTRY}/${IMAGE}:${TAG}"
+  post_build:
+    commands:
+      - >-
+        aws ecr describe-images --repository-name "$IMAGE" --image-ids imageTag="$TAG"
+        --query 'imageDetails[0].imageDigest' --output text || true

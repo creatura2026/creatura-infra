@@ -75,9 +75,24 @@ module "eks" {
     coredns    = {}
     kube-proxy = {}
     vpc-cni    = { before_compute = true }
+    # Donne aux pods du back leur rôle IAM (rds.tf) sans fournisseur OIDC.
+    eks-pod-identity-agent = {}
+  }
+  # L'ALB de l'API (api.tf) joint le NodePort du back sur les nœuds.
+  node_security_group_additional_rules = {
+    ingress_api_alb = {
+      description              = "API depuis le repartiteur de charge (ALB)"
+      type                     = "ingress"
+      protocol                 = "tcp"
+      from_port                = var.api_node_port
+      to_port                  = var.api_node_port
+      source_security_group_id = aws_security_group.api_alb.id
+    }
   }
   eks_managed_node_groups = {
     backend = {
+      # AL2 n'existe plus à partir de Kubernetes 1.33 : type d'AMI explicite.
+      ami_type       = "AL2023_x86_64_STANDARD"
       instance_types = ["t3.medium"]
       min_size       = 2
       max_size       = 3

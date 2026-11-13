@@ -16,6 +16,12 @@ variable "object_prefix" {
   default     = "sprites/"
 }
 
+variable "api_origin_domain_name" {
+  description = "DNS name of the backend load balancer (output api_origin_domain_name of the eks/ stack). Empty: CloudFront has no /api/* route."
+  type        = string
+  default     = ""
+}
+
 variable "cloudfront_price_class" {
   description = "CloudFront price class for the sprite distribution."
   type        = string

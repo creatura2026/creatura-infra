@@ -1,0 +1,72 @@
+# Base locale : image de creatura-app/db (PostgreSQL 16 + schéma + catalogue),
+# initialisée au premier démarrage, comme avec docker compose.
+apiVersion: v1
+kind: Service
+metadata:
+  name: creatura-db
+  namespace: creatura
+spec:
+  selector:
+    app: creatura-db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: creatura-db
+  namespace: creatura
+spec:
+  serviceName: creatura-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: creatura-db
+  template:
+    metadata:
+      labels:
+        app: creatura-db
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: postgres
+          image: creatura-db:local
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: creatura
+            - name: POSTGRES_PASSWORD
+              value: creatura
+            - name: POSTGRES_DB
+              value: creatura
+            # Comptes de démo : admin/admin, joueur1/joueur1, joueur2/joueur2.
+            - name: CREATURA_DEMO
+              value: "true"
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          # -h localhost : le serveur temporaire de l'initialisation n'écoute que sur le socket.
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h localhost -U creatura -d creatura"]
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

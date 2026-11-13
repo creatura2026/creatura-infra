@@ -20,6 +20,7 @@ spec:
       labels:
         app: creatura-backend
     spec:
+      serviceAccountName: creatura-backend
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       securityContext:
@@ -40,6 +41,12 @@ spec:
           capabilities:
             drop:
             - ALL
+        # Laisse au Service et à l'ALB le temps de retirer le pod avant l'arrêt d'uvicorn :
+        # sans cette pause, quelques requêtes échouent à chaque remplacement de pod.
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sleep", "5"]
         resources:
           requests:
             cpu: 100m

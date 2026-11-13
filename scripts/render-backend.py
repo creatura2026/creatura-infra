@@ -9,8 +9,10 @@ parser.add_argument('--image', required=True)
 parser.add_argument('--port', type=int, default=8000)
 parser.add_argument('--health-path', default='/api/v1/health')
 args = parser.parse_args()
-if not re.fullmatch(r'ghcr\.io/creatura2026/creatura-backend@sha256:[a-f0-9]{64}', args.image):
-    parser.error('Expected ghcr.io/creatura2026/creatura-backend pinned by digest')
+# GHCR (CI de creatura-app) ou le dépôt ECR du compte (eks/ecr.tf), toujours épinglé par digest.
+registries = r'(ghcr\.io/creatura2026|\d{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com)'
+if not re.fullmatch(registries + r'/creatura-backend@sha256:[a-f0-9]{64}', args.image):
+    parser.error('Expected creatura-backend from GHCR or the account ECR registry, pinned by digest')
 if not 1 <= args.port <= 65535:
     parser.error('Invalid port')
 if not args.health_path.startswith('/') or any(c.isspace() for c in args.health_path):
@@ -22,4 +24,5 @@ container['image'] = args.image
 container['ports'][0]['containerPort'] = args.port
 for probe in ['startupProbe', 'readinessProbe']:
     container[probe]['httpGet']['path'] = args.health_path
-print(yaml.safe_dump_all([deployment, yaml.safe_load((root / 'service.yaml').read_text())], sort_keys=False))
+service_account, service = (yaml.safe_load((root / name).read_text()) for name in ['serviceaccount.yaml', 'service.yaml'])
+print(yaml.safe_dump_all([service_account, deployment, service], sort_keys=False))

@@ -17,7 +17,17 @@ The bucket is never public. Users only reach it through the CloudFront hostname.
 | `/admin/` | admin dashboard (`creatura-app/apps/admin`, built with `--base=/admin/`) | `scripts/deploy-frontend.ps1` |
 | `/sprites/*.png` | creature sprites of this repository | Terraform |
 
-Both apps share one domain so that they share cookies. `/api/*` is reserved for the future backend.
+Both apps share one domain so that they share cookies. `/api/*` goes to the backend on EKS once the `api_origin_domain_name` variable is set (see below); until then CloudFront has no API route.
+
+## API route (`/api/*`)
+
+The backend load balancer is created by the `eks/` stack. Pass its DNS name to this stack to add the route:
+
+```powershell
+terraform apply -var="api_origin_domain_name=<output api_origin_domain_name of eks/>"
+```
+
+The route is never cached, accepts every HTTP method and WebSocket upgrades, and is not rewritten by the SPA function. Viewers must use HTTPS; CloudFront reaches the load balancer over HTTP because no certificate exists for its name. The `api_url` output is the public API address. The load balancer name changes each time `eks/` is re-created: apply again with the new value, and apply without the variable before destroying `eks/`.
 
 Caching: `assets/*`, `admin/assets/*` and `sprites/*` are cached for a long time (hashed or immutable files). Everything else (`index.html`, `sw.js`, `manifest.webmanifest`, icons) is never cached at the edge.
 
@@ -61,6 +71,8 @@ From the repository root, with `creatura-app` cloned next to this repository:
 .\scripts\deploy-frontend.ps1              # build, upload to S3, invalidate CloudFront
 ```
 
+On macOS / Linux, use the equivalent `./scripts/deploy-frontend.sh --stage-only` and `./scripts/deploy-frontend.sh`.
+
 The script reads the bucket name and the distribution ID from the Terraform outputs. Old hashed assets are kept in the bucket, so a failed release does not break the live site.
 
 ## Delete everything
@@ -76,6 +88,6 @@ The application bucket has `force_destroy` enabled: the destroy empties it, old 
 
 `.github/workflows/terraform.yml` plans on pull requests and applies on `main`. `.github/workflows/deploy-frontend.yml` publishes a frontend artifact built by the app repository CI. Both authenticate with the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` repository secrets, because IAM roles and OIDC cannot be created in this AWS organization.
 
-Repository variables: `AWS_REGION` (`eu-north-1`), `TF_STATE_BUCKET`, `TF_STATE_KEY`, `TF_STATE_REGION`, `APP_REPOSITORY`, `APP_PRODUCTION_BRANCH`, and optionally `APP_WORKFLOW_ID`. Secret `APP_REPO_TOKEN` gives read access to the app repository artifacts.
+Repository variables: `AWS_REGION` (`eu-north-1`), `TF_STATE_BUCKET`, `TF_STATE_KEY`, `TF_STATE_REGION`, `APP_REPOSITORY`, `APP_PRODUCTION_BRANCH`, and optionally `APP_WORKFLOW_ID` and `API_ORIGIN_DOMAIN_NAME`. Without `API_ORIGIN_DOMAIN_NAME`, an apply on `main` removes the `/api/*` route. Secret `APP_REPO_TOKEN` gives read access to the app repository artifacts.
 
 The frontend workflow is not usable yet: the app repository has no CI that builds and uploads the artifact. The artifact must have the layout described above (player at the root, admin under `admin/`).

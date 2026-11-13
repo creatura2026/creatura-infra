@@ -70,6 +70,7 @@ jobs:
         run: >-
           terraform plan -input=false -out=tfplan
           -var="aws_region=${{ vars.AWS_REGION }}"
+          -var="api_origin_domain_name=${{ vars.API_ORIGIN_DOMAIN_NAME }}"
 
       - name: Terraform apply
         if: github.event_name != 'pull_request'
