@@ -94,7 +94,7 @@ module "eks" {
     backend = {
       # AL2 n'existe plus à partir de Kubernetes 1.33 : type d'AMI explicite.
       ami_type       = "AL2023_x86_64_STANDARD"
-      instance_types = ["t3.medium"]
+      instance_types = ["t3.small"]
       min_size       = 2
       max_size       = 3
       desired_size   = 2

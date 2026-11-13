@@ -42,3 +42,19 @@ for stack in eks infra; do
     "-backend-config=bucket=$TF_STATE_BUCKET" "-backend-config=key=$key" \
     "-backend-config=region=$TF_STATE_REGION" -backend-config=encrypt=true -backend-config=use_lockfile=true
 done
+
+if [ -n "${CUSTOM_DOMAIN:-}" ]; then
+  python - <<'PYCODE'
+import json, os, re
+from pathlib import Path
+domain = os.environ['CUSTOM_DOMAIN']
+if not re.fullmatch(r'([a-z0-9-]+\.)+[a-z]{2,}', domain):
+    raise SystemExit('CUSTOM_DOMAIN must be a lowercase domain without protocol, path or trailing dot')
+Path('dns/ci.auto.tfvars.json').write_text(json.dumps({'domain_name': domain}))
+PYCODE
+  terraform -chdir=dns init -input=false -reconfigure \
+    "-backend-config=bucket=$TF_STATE_BUCKET" \
+    "-backend-config=key=${TF_DNS_STATE_KEY:-dns/terraform.tfstate}" \
+    "-backend-config=region=$TF_STATE_REGION" \
+    -backend-config=encrypt=true -backend-config=use_lockfile=true
+fi

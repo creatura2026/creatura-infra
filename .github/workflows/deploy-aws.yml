@@ -42,6 +42,8 @@ jobs:
       TF_STATE_REGION: ${{ vars.TF_STATE_REGION || 'eu-north-1' }}
       TF_STATE_KEY: ${{ vars.TF_STATE_KEY || 'creatura-infra/terraform.tfstate' }}
       TF_EKS_STATE_KEY: ${{ vars.TF_EKS_STATE_KEY || 'eks/terraform.tfstate' }}
+      TF_DNS_STATE_KEY: ${{ vars.TF_DNS_STATE_KEY || 'dns/terraform.tfstate' }}
+      CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || 'creatura-backend' }}
       EKS_KUBERNETES_VERSION: ${{ vars.EKS_KUBERNETES_VERSION }}
       EKS_ADMIN_PRINCIPAL_ARN: ${{ vars.EKS_ADMIN_PRINCIPAL_ARN }}
@@ -194,7 +196,7 @@ jobs:
             fi
           done
 
-      - name: Provision EKS, RDS, ALB and CDN
+      - name: Provision DNS, EKS, RDS, ALB and CDN
         run: bash scripts/ci/provision.sh
 
       - name: Determine kubectl version matching EKS
