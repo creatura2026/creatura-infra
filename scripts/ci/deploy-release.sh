@@ -69,7 +69,7 @@ def tf(stack, name):
 raw = subprocess.check_output(['kubectl', '-n', 'creatura', 'get', 'secret', 'creatura-backend',
     '--ignore-not-found', '-o', 'json'], text=True)
 data = json.loads(raw).get('data', {}) if raw.strip() else {}
-cdn = 'https://' + tf('infra', 'cloudfront_domain_name')
+cdn = tf('infra', 'site_url').rstrip('/')
 values = dict(DATABASE_URL=tf('eks', 'backend_database_url'), DB_IAM_AUTH='true',
     AWS_REGION=__import__('os').environ['AWS_REGION'], TIMEZONE='Europe/Paris',
     IMAGE_BASE_URL=cdn, CORS_ORIGINS=cdn)
@@ -92,7 +92,8 @@ if ! kubectl -n "$namespace" rollout status deployment/creatura-backend --timeou
 fi
 # Publish the already-tested artifact. This flag prevents any frontend rebuild.
 bash scripts/deploy-frontend.sh --skip-build
-cdn="https://$(terraform -chdir=infra output -raw cloudfront_domain_name)"
+cdn="$(terraform -chdir=infra output -raw site_url)"
+cdn="${cdn%/}"
 distribution=$(terraform -chdir=infra output -raw cloudfront_distribution_id)
 # Wait for the last invalidation issued by the publisher before smoke checks.
 invalidation=$(aws cloudfront create-invalidation --distribution-id "$distribution" --paths '/*' --query Invalidation.Id --output text)

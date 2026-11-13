@@ -98,16 +98,34 @@ find scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
 Les workflows sont contrôlés par actionlint. L'exécution réelle de la CI app et le déploiement AWS nécessitent les permissions, secrets et ressources du compte ; une validation locale ne prouve pas leur réussite.
 
 Lors de la première installation, le push infra peut échouer avant AWS si la CI app existante ne fournit pas encore la release v2. C’est attendu : une fois les deux modifications installées et les secrets configurés, un nouveau push app sur develop produit la première release v2 et déclenche son déploiement. Les anciens artefacts ne sont jamais utilisés par défaut en remplacement.
-## Nom de domaine (facultatif)
+## DNS dans la CI/CD
 
-La stack permanente `dns/` crée une zone Route 53 pour un sous-domaine (ex. `creatura.creasmaloud.dev`) et son certificat HTTPS. `aws-down.sh` ne la détruit pas, pour ne pas avoir à refaire la délégation.
+Ajouter dans `production` :
 
-```sh
-cp dns/terraform.tfvars.example dns/terraform.tfvars   # mettre le sous-domaine voulu
-terraform -chdir=dns init && terraform -chdir=dns apply
-terraform -chdir=dns output name_servers
+| Variable | Valeur |
+|---|---|
+| `CUSTOM_DOMAIN` | Sous-domaine réellement possédé/délégué, sans https:// ni chemin (exemple uniquement : `creatura.creasmaloud.dev`) |
+| `TF_DNS_STATE_KEY` | `dns/terraform.tfstate` par défaut ; état séparé dans le bucket existant |
+
+Sans `CUSTOM_DOMAIN`, l’adresse CloudFront reste utilisée. Si un domaine personnalisé est déjà présent, la CI refuse de le supprimer silencieusement quand cette variable manque.
+
+La CI provisionne `dns/` avant EKS : zone Route 53, certificat ACM en `us-east-1` et enregistrements DNS de validation. Les NS sont affichés dans les logs et le résumé du workflow. Configurer une fois ces NS chez le fournisseur DNS parent/registrar. Tant que le certificat est en attente, la CI s'arrête après cinq minutes, avant de lancer EKS dans ce run. Attendre la propagation puis relancer le workflow infra avec la même release app. La CI n'achète pas de domaine et ne modifie pas le registrar.
+
+Une fois le certificat `ISSUED`, les sorties DNS sont transmises automatiquement à `infra/` : alias CloudFront, certificat et enregistrements ALIAS A/AAAA. Les variables `IMAGE_BASE_URL` et `CORS_ORIGINS` du backend, ainsi que les contrôles de santé, utilisent `site_url`, donc le domaine personnalisé. Aucun rebuild app.
+
+Permissions supplémentaires pour l'identité AWS : `dns/ci-permissions.json` contient un complément large de provisioning Route 53 et ACM. Route 53 est global ; ACM doit être autorisé en `us-east-1`, pas seulement `eu-north-1`.
+
+La zone est permanente. Si un ancien état DNS local existe, le migrer avant d'activer la CI :
+
+```powershell
+terraform -chdir=dns init -migrate-state `
+  "-backend-config=bucket=creatura-tfstate-470805151953-eu-north-1" `
+  "-backend-config=key=dns/terraform.tfstate" `
+  "-backend-config=region=eu-north-1" `
+  "-backend-config=encrypt=true" `
+  "-backend-config=use_lockfile=true"
 ```
 
-Chez le registrar : un enregistrement **NS** par serveur affiché, HOST = le sous-domaine (ex. `creatura`), et aucun autre enregistrement sur ce HOST. Le certificat se valide alors seul en quelques minutes, et `aws-up.sh` branche le domaine sur CloudFront dès qu'il est validé (statut `ISSUED`). Coût : 0,50 $ par mois pour la zone. État local dans `dns/terraform.tfstate` : ne pas le perdre.
+Ne pas exécuter cette migration depuis un dossier dépourvu de l'ancien état local. Si la zone existe hors de l'état distant, la CI refuse d'en créer une deuxième : migrer l'état ou importer les ressources concernées. Le script `aws-down.sh` conserve le bucket bootstrap s'il contient l'état DNS permanent ; ne pas le détruire à la main sans sauvegarde/migration de cet état.
 
-Détails : [`eks/README.md`](eks/README.md) (cluster, base, API, images) et [`infra/README.md`](infra/README.md) (CDN).
+Les nœuds utilisent désormais `t3.small`, éligible dans le compte vérifié. La recréation du groupe `CREATE_FAILED` peut nécessiter un plan manuel : le garde-fou des plans destructifs reste actif.

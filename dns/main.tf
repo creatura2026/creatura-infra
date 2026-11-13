@@ -13,11 +13,13 @@
 #
 # La stack infra/ lit ces sorties (scripts/aws-up.sh) : alias du domaine sur la
 # distribution CloudFront et enregistrements ALIAS vers elle.
-# État local, comme bootstrap/ : terraform.tfstate dans ce dossier, à ne pas perdre.
+# État S3 séparé : dns/terraform.tfstate. Migrer tout ancien état local avant activation CI.
 # =============================================================================
 
 terraform {
   required_version = ">= 1.10.0"
+
+  backend "s3" {}
 
   required_providers {
     aws = {

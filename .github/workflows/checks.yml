@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        stack: [bootstrap, infra, eks]
+        stack: [bootstrap, infra, eks, dns]
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3

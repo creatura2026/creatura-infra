@@ -39,7 +39,7 @@ tail_log() { printf -- '--- fin de %s\n' "$1" >&2; tail -25 "$1" >&2; }
 mkdir -p "$LOGS"
 
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)" || die "identité AWS invalide."
-STATE_BUCKET="creatura-tfstate-$ACCOUNT"
+STATE_BUCKET="${TF_STATE_BUCKET:-creatura-tfstate-$ACCOUNT}"
 aws s3api head-bucket --bucket "$STATE_BUCKET" >/dev/null 2>&1 || die "bucket d'état $STATE_BUCKET absent : rien à détruire."
 
 if [ "$CONFIRM" = "yes" ]; then
@@ -83,12 +83,19 @@ wait "$pid_eks" || failed="$failed destroy-eks"
 for part in $failed; do tail_log "$LOGS/$part.log"; done
 [ -z "$failed" ] || die "échec de :$failed ; relancer scripts/aws-down.sh (le bucket d'état est conservé)."
 
-say "Bucket d'état"
-tf bootstrap destroy -input=false -auto-approve -var "aws_region=$REGION" -var "state_bucket_name=$STATE_BUCKET" \
-  >"$LOGS/destroy-bootstrap.log" 2>&1 || { tail_log "$LOGS/destroy-bootstrap.log"; die "bootstrap/"; }
+say "Protection de l'état DNS permanent"
+aws s3api list-objects-v2 --bucket "$STATE_BUCKET" --prefix "${TF_DNS_STATE_KEY:-dns/terraform.tfstate}" --output json > "$LOGS/dns-state-objects.json"
+python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$LOGS/dns-state-objects.json"
+if python3 -c 'import json,os,sys; key=os.environ.get("TF_DNS_STATE_KEY","dns/terraform.tfstate"); sys.exit(0 if any(o["Key"] == key for o in json.load(open(sys.argv[1])).get("Contents",[])) else 1)' "$LOGS/dns-state-objects.json"; then
+  say "Bucket bootstrap conservé : il contient l'état DNS permanent."
+else
+  say "Bucket d'état (aucun état DNS permanent)"
+  tf bootstrap destroy -input=false -auto-approve -var "aws_region=$REGION" -var "state_bucket_name=$STATE_BUCKET" \
+    >"$LOGS/destroy-bootstrap.log" 2>&1 || { tail_log "$LOGS/destroy-bootstrap.log"; die "bootstrap/"; }
+fi
 rm -f "$ROOT/.deploy/kubeconfig-eks"
 
-say "Tout est détruit"
+say "Stacks applicatives détruites ; DNS conservé s’il était configuré"
 aws rds describe-db-snapshots --region "$REGION" --snapshot-type manual \
   --query 'DBSnapshots[?starts_with(DBSnapshotIdentifier, `creatura-db-`)].[DBSnapshotIdentifier,SnapshotCreateTime]' --output text \
   | sed 's/^/  snapshot conservé : /'

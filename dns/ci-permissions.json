@@ -1,0 +1,22 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CreaturaDNS",
+      "Effect": "Allow",
+      "Action": "route53:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "CreaturaCloudFrontCertificates",
+      "Effect": "Allow",
+      "Action": "acm:*",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
+    }
+  ]
+}
