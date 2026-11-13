@@ -7,6 +7,7 @@ import yaml
 parser = argparse.ArgumentParser()
 parser.add_argument('--image', required=True)
 parser.add_argument('--port', type=int, default=8000)
+parser.add_argument('--pull-secret', help='Optional Kubernetes registry Secret')
 parser.add_argument('--health-path', default='/api/v1/health')
 args = parser.parse_args()
 # GHCR (CI de creatura-app) ou le dépôt ECR du compte (eks/ecr.tf), toujours épinglé par digest.
@@ -19,6 +20,10 @@ if not args.health_path.startswith('/') or any(c.isspace() for c in args.health_
     parser.error('Health path must start with / and contain no whitespace')
 root = Path(__file__).resolve().parents[1] / 'k8s' / 'backend'
 deployment = yaml.safe_load((root / 'deployment.yaml').read_text())
+if args.pull_secret:
+    if not re.fullmatch(r'[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?', args.pull_secret) or len(args.pull_secret) > 253:
+        parser.error('Invalid pull secret name')
+    deployment['spec']['template']['spec']['imagePullSecrets'] = [{'name': args.pull_secret}]
 container = deployment['spec']['template']['spec']['containers'][0]
 container['image'] = args.image
 container['ports'][0]['containerPort'] = args.port

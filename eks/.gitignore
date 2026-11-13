@@ -3,3 +3,5 @@
 *.tfvars
 !terraform.tfvars.example
 *.tfplan
+
+*.tfvars.json
