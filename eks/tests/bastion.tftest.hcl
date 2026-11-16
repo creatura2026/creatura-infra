@@ -9,8 +9,8 @@ mock_provider "aws" {
   mock_data "aws_iam_session_context" {
     defaults = { issuer_arn = "arn:aws:iam::123456789012:user/admin" }
   }
-  mock_data "aws_ssm_parameter" {
-    defaults = { insecure_value = "ami-0123456789abcdef0", value = "ami-0123456789abcdef0" }
+  mock_data "aws_ami" {
+    defaults = { id = "ami-0123456789abcdef0" }
   }
   mock_data "aws_partition" {
     defaults = { partition = "aws" }

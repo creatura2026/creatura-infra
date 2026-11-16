@@ -35,10 +35,25 @@ locals {
   bastion_name  = "${var.cluster_name}-bastion"
 }
 
-# Dernière Amazon Linux 2023 ARM64 (l'agent SSM y est préinstallé).
-data "aws_ssm_parameter" "bastion_ami" {
-  count = local.bastion_count
-  name  = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
+# Dernière Amazon Linux 2023 ARM64 (l'agent SSM y est préinstallé). Recherche EC2 plutôt que le
+# paramètre public SSM : l'identité de la CI a ec2:DescribeImages, pas ssm:GetParameter.
+data "aws_ami" "bastion" {
+  count       = local.bastion_count
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-2023.*-kernel-*-arm64"]
+  }
+  filter {
+    name   = "architecture"
+    values = ["arm64"]
+  }
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
 }
 
 # Rôle de l'instance : juste ce qu'il faut pour s'enregistrer auprès de Session Manager.
@@ -97,7 +112,7 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_bastion" {
 
 resource "aws_instance" "bastion" {
   count                       = local.bastion_count
-  ami                         = data.aws_ssm_parameter.bastion_ami[0].insecure_value
+  ami                         = data.aws_ami.bastion[0].id
   instance_type               = var.bastion_instance_type
   subnet_id                   = module.vpc.public_subnets[0]
   associate_public_ip_address = true
