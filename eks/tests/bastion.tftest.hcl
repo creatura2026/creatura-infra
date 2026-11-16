@@ -21,7 +21,7 @@ mock_provider "aws" {
 }
 
 variables {
-  kubernetes_version           = "1.35"
+  kubernetes_version           = "1.36"
   endpoint_public_access_cidrs = ["203.0.113.10/32"]
   administrator_principal_arn  = "arn:aws:iam::123456789012:user/admin"
 }
