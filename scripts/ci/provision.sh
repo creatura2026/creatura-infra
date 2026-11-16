@@ -4,13 +4,21 @@ plan_and_apply() {
   local stack="$1"
   shift
   terraform "-chdir=$stack" plan -input=false -out=ci.tfplan "$@"
-  # Automatic deployment never destroys or replaces existing resources, especially RDS.
+  # Automatic deployment never destroys or replaces real cloud resources, especially RDS.
+  # Timer/no-op resources (time_sleep, null_resource) have no AWS side-effect and are
+  # recreated by in-place upgrades (e.g. a Kubernetes version bump re-triggers time_sleep):
+  # they are exempt so a legitimate upgrade is not blocked.
   terraform "-chdir=$stack" show -json ci.tfplan > .deploy/plan.json
   python - <<'PY'
 import json
 from pathlib import Path
+EXEMPT_TYPES = {'time_sleep', 'null_resource'}
 p = json.loads(Path('.deploy/plan.json').read_text())
-deleted = [r['address'] for r in p.get('resource_changes', []) if 'delete' in r['change']['actions']]
+deleted = [
+    r['address']
+    for r in p.get('resource_changes', [])
+    if 'delete' in r['change']['actions'] and r.get('type') not in EXEMPT_TYPES
+]
 if deleted:
     raise SystemExit('Destructive plan requires a separately reviewed manual operation: ' + ', '.join(deleted))
 PY
