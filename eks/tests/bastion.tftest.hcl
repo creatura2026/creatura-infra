@@ -48,8 +48,8 @@ run "bastion_active" {
   }
 
   assert {
-    condition     = aws_instance.bastion[0].instance_type == "t4g.nano" && aws_instance.bastion[0].associate_public_ip_address
-    error_message = "Bastion t4g.nano dans un sous-réseau public"
+    condition     = aws_instance.bastion[0].instance_type == "t3.micro" && aws_instance.bastion[0].associate_public_ip_address
+    error_message = "Bastion t3.micro (offre gratuite) dans un sous-réseau public"
   }
   assert {
     condition     = aws_instance.bastion[0].metadata_options[0].http_tokens == "required"

@@ -13,7 +13,7 @@
 # -----------------------------------------------------------------------------
 
 variable "create_bastion" {
-  description = "Crée le bastion SSM pour accéder à la base depuis un poste (environ 3 $/mois)."
+  description = "Crée le bastion SSM pour accéder à la base depuis un poste (t3.micro : offre gratuite AWS)."
   type        = bool
   default     = false
 }
@@ -25,9 +25,9 @@ variable "bastion_tunnel_users" {
 }
 
 variable "bastion_instance_type" {
-  description = "Type d'instance (Graviton, ARM64) : le bastion ne fait que relayer."
+  description = "Type d'instance x86_64. t3.micro : éligible à l'offre gratuite AWS dans eu-north-1 (750 h/mois)."
   type        = string
-  default     = "t4g.nano"
+  default     = "t3.micro"
 }
 
 locals {
@@ -35,7 +35,7 @@ locals {
   bastion_name  = "${var.cluster_name}-bastion"
 }
 
-# Dernière Amazon Linux 2023 ARM64 (l'agent SSM y est préinstallé). Recherche EC2 plutôt que le
+# Dernière Amazon Linux 2023 x86_64 (l'agent SSM y est préinstallé), comme le type t3. Recherche EC2 plutôt que le
 # paramètre public SSM : l'identité de la CI a ec2:DescribeImages, pas ssm:GetParameter.
 data "aws_ami" "bastion" {
   count       = local.bastion_count
@@ -44,11 +44,11 @@ data "aws_ami" "bastion" {
 
   filter {
     name   = "name"
-    values = ["al2023-ami-2023.*-kernel-*-arm64"]
+    values = ["al2023-ami-2023.*-kernel-*-x86_64"]
   }
   filter {
     name   = "architecture"
-    values = ["arm64"]
+    values = ["x86_64"]
   }
   filter {
     name   = "virtualization-type"
