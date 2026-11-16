@@ -12,3 +12,8 @@ create_image_builder    = true
 # Bastion SSM pour accéder à la base depuis un poste (bastion.tf), t3.micro de l'offre gratuite.
 # create_bastion       = true
 # bastion_tunnel_users = ["dbAccess"]
+
+# Upload de sprites par les admins via l'API backend (rds.tf) : outputs du stack infra/.
+# sprites_bucket_arn          = "arn:aws:s3:::creatura-assets-xxxx"
+# cloudfront_distribution_arn = "arn:aws:cloudfront::123456789012:distribution/XXXXXXXXXXXX"
+

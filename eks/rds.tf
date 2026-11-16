@@ -226,6 +226,45 @@ resource "aws_iam_role_policy" "backend_rds_connect" {
   })
 }
 
+# -----------------------------------------------------------------------------
+# Permissions S3 + CloudFront : upload de sprites par l'admin via l'API
+# -----------------------------------------------------------------------------
+variable "sprites_bucket_arn" {
+  description = "ARN du bucket S3 des sprites (output bucket_arn du stack infra/). Vide : permission non créée."
+  type        = string
+  default     = ""
+}
+
+variable "cloudfront_distribution_arn" {
+  description = "ARN de la distribution CloudFront (output cloudfront_distribution_id du stack infra/, préfixé). Vide : permission non créée."
+  type        = string
+  default     = ""
+}
+
+resource "aws_iam_role_policy" "backend_sprites" {
+  count = var.sprites_bucket_arn != "" ? 1 : 0
+  name  = "sprites-s3"
+  role  = aws_iam_role.backend_pod.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "SpritesReadWrite"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:DeleteObject", "s3:GetObject"]
+        Resource = "${var.sprites_bucket_arn}/sprites/*"
+      },
+      {
+        Sid      = "CloudFrontInvalidate"
+        Effect   = "Allow"
+        Action   = "cloudfront:CreateInvalidation"
+        Resource = var.cloudfront_distribution_arn
+      },
+    ]
+  })
+}
+
 resource "aws_eks_pod_identity_association" "backend" {
   cluster_name    = module.eks.cluster_name
   namespace       = var.backend_namespace

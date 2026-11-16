@@ -100,6 +100,39 @@ terraform -chdir=bootstrap destroy   # always last: this bucket holds the state 
 
 The application bucket has `force_destroy` enabled: the destroy empties it, old object versions included. A bucket created before that setting existed needs one `terraform apply` first. The CloudFront hostname and the bucket name change on the next creation.
 
+## Ajouter ou remplacer un sprite
+
+Les sprites sont des fichiers PNG dans le bucket sous le préfixe `sprites/`. Terraform gère uniquement ceux présents dans `../images/` ; tout objet uploadé directement sur S3 est ignoré par les `apply` suivants (il n'est pas dans le state Terraform) et ne sera jamais supprimé par Terraform.
+
+**Prérequis** : les clés AWS d'un compte admin (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) avec les permissions S3 et CloudFront déjà requises pour Terraform. Récupérer le nom du bucket et l'ID de distribution depuis les outputs Terraform :
+
+```bash
+terraform -chdir=infra output bucket_name          # → creatura-assets-xxxx
+terraform -chdir=infra output cloudfront_distribution_id
+```
+
+**Uploader un sprite** :
+
+```bash
+aws s3 cp ma_creature.png s3://<bucket>/sprites/ma_creature.png \
+  --content-type image/png \
+  --cache-control "public, max-age=31536000, immutable"
+```
+
+Le nom du fichier doit être en **snake_case minuscules** (ex. `moss_puff.png`) — la clé S3 est sensible à la casse et doit correspondre exactement à la colonne `image` de la table `creature` en base.
+
+**Invalider le cache CloudFront** (nécessaire pour que les nouveaux utilisateurs voient le sprite immédiatement) :
+
+```bash
+aws cloudfront create-invalidation \
+  --distribution-id <distribution-id> \
+  --paths "/sprites/ma_creature.png"
+```
+
+**Enregistrer la créature en base** : insérer une ligne dans la table `creature` (via le tunnel RDS ou `kubectl exec`) avec `image = 'sprites/ma_creature.png'`. Le backend concatène `IMAGE_BASE_URL` + `/` + cette valeur pour former l'URL publique.
+
+> Si le sprite est destiné à rester de façon permanente, l'ajouter aussi dans `../images/` et commiter — Terraform en prendra la propriété et le gérera comme les autres.
+
 ## GitHub Actions
 
 La CI/CD automatique depuis `develop` est décrite dans le [README principal](../README.md). Le workflow unifié `deploy-aws.yml` remplace les anciens workflows indépendants de Terraform, frontend et backend. Il utilise les builds testés du dépôt app, sans rebuild, et reçoit l'origine API directement de l'état EKS.
