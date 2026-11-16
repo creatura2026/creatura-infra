@@ -10,6 +10,8 @@
     /telechargements/  Windows app (apps/desktop): both exe files and latest.json, read by
                  the home page to offer the download. The exe calls the API of site_url
                  (simulated API with -Api mock).
+                 Android app (apps/mobile): the APK and android.json, read the same way on
+                 phones. The APK opens site_url. Built when Java and the Android SDK are found.
 
   Hashed files under assets/ and admin/assets/ are uploaded first with a one-year
   immutable cache. Everything else (index.html, service worker, manifest, icons)
@@ -34,14 +36,20 @@
   "server": the apps call the real backend on /api/v1, on the same domain.
 
 .PARAMETER SkipBuild
-  Reuse the content already staged in .deploy/site instead of building again (and the exe
-  already built in creatura-app/apps/desktop/release).
+  Reuse the content already staged in .deploy/site instead of building again (and the exe and
+  APK already built in creatura-app/apps/*/release).
 
 .PARAMETER SkipDesktop
   Neither build nor publish the Windows app.
 
 .PARAMETER DesktopDir
   Exe files and latest.json already built elsewhere (e.g. the app CI artifact): published as is.
+
+.PARAMETER SkipMobile
+  Neither build nor publish the Android app.
+
+.PARAMETER MobileDir
+  APK and android.json already built elsewhere (e.g. the app CI artifact): published as is.
 
 .PARAMETER StageOnly
   Build and stage the site locally, print what would be uploaded, and stop. Nothing is sent to AWS.
@@ -62,6 +70,8 @@ param(
   [switch]$SkipBuild,
   [switch]$SkipDesktop,
   [string]$DesktopDir,
+  [switch]$SkipMobile,
+  [string]$MobileDir,
   [switch]$StageOnly
 )
 
@@ -278,6 +288,66 @@ if (-not $SkipDesktop) {
 }
 
 
+# --- 5. Android app -------------------------------------------------------------------
+
+# Gradle needs Java and the Android SDK (installed by Android Studio, or ANDROID_HOME).
+function Test-AndroidBuild {
+  if (-not (Get-Command java -ErrorAction SilentlyContinue)) { return $false }
+  $candidates = @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT)
+  if ($env:LOCALAPPDATA) { $candidates += Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
+  foreach ($dir in $candidates) {
+    if ($dir -and (Test-Path $dir)) { return $true }
+  }
+  return $false
+}
+
+if (-not $SkipMobile) {
+  $MobileRelease = if ($MobileDir) { $MobileDir } else { Join-Path $AppPath 'apps\mobile\release' }
+  # APK provided (-MobileDir): already built, nothing to rebuild.
+  if (-not $SkipBuild -and -not $MobileDir) {
+    if (Test-AndroidBuild) {
+      Push-Location $AppPath
+      try {
+        if ($Api -eq 'mock') {
+          Write-Host '==> Building the Android app (simulated API)' -ForegroundColor Cyan
+          Invoke-Native pnpm @('mobile:demo')
+        }
+        else {
+          # The APK opens the site itself: the custom domain when there is one, CloudFront otherwise.
+          $siteUrl = (Get-TerraformOutput 'site_url').TrimEnd('/')
+          Write-Host "==> Building the Android app (site $siteUrl)" -ForegroundColor Cyan
+          Invoke-Native pnpm @('mobile', '--url', $siteUrl)
+        }
+      }
+      finally {
+        Pop-Location
+      }
+    }
+    else {
+      Write-Warning 'Android app not built: Java 21 and the Android SDK are required. The site is still published; on phones the home page shows the app as coming soon.'
+      $MobileRelease = $null
+    }
+  }
+  if ($MobileRelease) {
+    $androidManifest = Join-Path $MobileRelease 'android.json'
+    if (-not (Test-Path $androidManifest)) {
+      # No APK (e.g. CI: the Android job of the app is optional). An APK already online is kept.
+      Write-Warning "Android app not published: android.json is missing from $MobileRelease. Build the APK (pnpm mobile in creatura-app) to offer it."
+    }
+    else {
+      Write-Host "==> Uploading the Android app to s3://$Bucket/telechargements/" -ForegroundColor Cyan
+      # The APK first: android.json must never point to a file that is not uploaded yet.
+      Invoke-Native aws @('s3', 'cp', $MobileRelease, "s3://$Bucket/telechargements/", '--recursive', '--only-show-errors',
+        '--exclude', '*', '--include', 'Creatura-*.apk',
+        '--content-type', 'application/vnd.android.package-archive', '--cache-control', $RevalidateCache)
+      Invoke-Native aws @('s3', 'cp', $androidManifest, "s3://$Bucket/telechargements/android.json", '--only-show-errors',
+        '--content-type', 'application/json', '--cache-control', $RevalidateCache)
+      $version = (Get-Content $androidManifest -Raw | ConvertFrom-Json).version
+      Write-Host "  uploaded Android app $version"
+    }
+  }
+}
+
 # Without a published exe, the player app still requests /telechargements/latest.json on every
 # visit: a "no release" manifest avoids that 404 (the front then hides the download section).
 & aws s3api head-object --bucket $Bucket --key 'telechargements/latest.json' *> $null
@@ -285,6 +355,15 @@ if ($LASTEXITCODE -ne 0) {
   $placeholder = Join-Path ([System.IO.Path]::GetTempPath()) 'creatura-latest.json'
   [System.IO.File]::WriteAllText($placeholder, "{`n  `"available`": false`n}`n")
   Invoke-Native aws @('s3', 'cp', $placeholder, "s3://$Bucket/telechargements/latest.json", '--only-show-errors',
+    '--content-type', 'application/json', '--cache-control', 'no-cache')
+  Remove-Item $placeholder
+}
+# Same for the APK: without a published version, phones show the app as coming soon.
+& aws s3api head-object --bucket $Bucket --key 'telechargements/android.json' *> $null
+if ($LASTEXITCODE -ne 0) {
+  $placeholder = Join-Path ([System.IO.Path]::GetTempPath()) 'creatura-android.json'
+  [System.IO.File]::WriteAllText($placeholder, "{`n  `"available`": false`n}`n")
+  Invoke-Native aws @('s3', 'cp', $placeholder, "s3://$Bucket/telechargements/android.json", '--only-show-errors',
     '--content-type', 'application/json', '--cache-control', 'no-cache')
   Remove-Item $placeholder
 }

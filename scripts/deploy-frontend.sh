@@ -8,6 +8,9 @@
 #   /telechargements/   application Windows (apps/desktop) : les deux exe et latest.json, que la
 #                page d'accueil lit pour proposer le téléchargement. L'exe appelle l'API de
 #                site_url. Construit sous Windows (Git Bash) ou avec Wine, sinon étape sautée.
+#                Application Android (apps/mobile) : l'APK et android.json, lus de la même façon
+#                sur téléphone. L'APK ouvre site_url. Construit si Java et le SDK Android sont
+#                présents, sinon étape sautée.
 #
 # Les fichiers à nom haché (assets/, admin/assets/) partent en premier avec un cache d'un an.
 # Le reste (index.html, service worker, manifeste, icônes) part en dernier en « no-cache ».
@@ -23,11 +26,14 @@
 #   --distribution-id ID    distribution à invalider (par défaut : sortie cloudfront_distribution_id)
 #   --mock                  API simulée dans le navigateur (VITE_API_MOCK=true) : à utiliser tant
 #                           que /api/* n'est pas relié à un back sur CloudFront
-#   --skip-build            réutilise le contenu déjà présent dans .deploy/site (et l'exe déjà
-#                           construit dans creatura-app/apps/desktop/release)
+#   --skip-build            réutilise le contenu déjà présent dans .deploy/site (et l'exe et
+#                           l'APK déjà construits dans creatura-app/apps/*/release)
 #   --skip-desktop          ne construit ni ne publie l'application Windows
 #   --desktop-dir DIR       exe et latest.json déjà construits ailleurs (ex. artefact de la CI de
 #                           l'app) : publiés tels quels, sans construction
+#   --skip-mobile           ne construit ni ne publie l'application Android
+#   --mobile-dir DIR        APK et android.json déjà construits ailleurs (ex. artefact de la CI
+#                           de l'app) : publiés tels quels, sans construction
 #   --stage-only            s'arrête avant le premier appel AWS
 set -euo pipefail
 # Lu en entier avant exécution (bloc { … }) : modifier ce fichier pendant qu'il tourne ne
@@ -45,6 +51,8 @@ STAGE_ONLY="no"
 MOCK="no"
 DESKTOP="yes"
 DESKTOP_DIR=""
+MOBILE="yes"
+MOBILE_DIR=""
 
 IMMUTABLE_CACHE="public, max-age=31536000, immutable"
 REVALIDATE_CACHE="no-cache"
@@ -62,8 +70,10 @@ while [ $# -gt 0 ]; do
     --skip-build) SKIP_BUILD="yes" ;;
     --skip-desktop) DESKTOP="no" ;;
     --desktop-dir) DESKTOP_DIR="${2:?}"; shift ;;
+    --skip-mobile) MOBILE="no" ;;
+    --mobile-dir) MOBILE_DIR="${2:?}"; shift ;;
     --stage-only) STAGE_ONLY="yes" ;;
-    -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "option inconnue : $1" ;;
   esac
   shift
@@ -232,11 +242,67 @@ if [ "$DESKTOP" = "yes" ]; then
   fi
 fi
 
+# --- 5. Application Android -----------------------------------------------------------
+
+# Gradle demande Java et le SDK Android (installé par Android Studio, ou ANDROID_HOME).
+can_build_android() {
+  command -v java >/dev/null 2>&1 || return 1
+  local dir
+  for dir in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "${LOCALAPPDATA:-}/Android/Sdk" \
+    "$HOME/Android/Sdk" "$HOME/Library/Android/sdk"; do
+    [ -n "$dir" ] && [ -d "$dir" ] && return 0
+  done
+  return 1
+}
+
+if [ "$MOBILE" = "yes" ]; then
+  MOBILE_RELEASE="${MOBILE_DIR:-$APP_PATH/apps/mobile/release}"
+  # APK fourni (--mobile-dir) : déjà construit, rien à reconstruire.
+  if [ "$SKIP_BUILD" = "no" ] && [ -z "$MOBILE_DIR" ]; then
+    if can_build_android; then
+      if [ "$MOCK" = "yes" ]; then
+        say "Application Android (API simulée)"
+        (cd "$APP_PATH" && pnpm mobile:demo)
+      else
+        # L'APK ouvre le site lui-même : domaine personnalisé s'il existe, sinon CloudFront.
+        site_url="$(terraform_output site_url)"
+        site_url="${site_url%/}"
+        say "Application Android (site $site_url)"
+        (cd "$APP_PATH" && pnpm mobile --url "$site_url")
+      fi
+    else
+      printf '\nApplication Android non construite : il faut Java 21 et le SDK Android. Le site reste\n'
+      printf 'publié ; sur téléphone, la page d accueil annonce l application comme bientôt disponible.\n'
+      MOBILE_RELEASE=""
+    fi
+  fi
+  if [ -n "$MOBILE_RELEASE" ] && [ -f "$MOBILE_RELEASE/android.json" ]; then
+    say "Envoi de l'application Android vers s3://$BUCKET/telechargements/"
+    # L'APK d'abord : android.json ne doit jamais pointer vers un fichier pas encore envoyé.
+    aws s3 cp "$MOBILE_RELEASE" "s3://$BUCKET/telechargements/" --recursive --only-show-errors \
+      --exclude "*" --include "Creatura-*.apk" \
+      --content-type "application/vnd.android.package-archive" --cache-control "$REVALIDATE_CACHE"
+    aws s3 cp "$MOBILE_RELEASE/android.json" "s3://$BUCKET/telechargements/android.json" --only-show-errors \
+      --content-type "application/json" --cache-control "$REVALIDATE_CACHE"
+    echo "  envoyé : version $(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$MOBILE_RELEASE/android.json" | head -n 1)"
+  elif [ -n "$MOBILE_RELEASE" ]; then
+    # Pas d'APK (ex. CI : le job Android de l'app est facultatif). L'APK déjà en ligne est gardé.
+    printf '\nApplication Android non publiée : android.json absent de %s.\n' "$MOBILE_RELEASE"
+    printf 'Le site est publié ; construire l APK (pnpm mobile dans creatura-app) pour le proposer.\n'
+  fi
+fi
+
 # Sans exe publié, l'app joueur demande quand même /telechargements/latest.json à chaque visite :
 # un manifeste « aucune version » évite ce 404 (le front n'affiche alors pas le téléchargement).
 if ! aws s3api head-object --bucket "$BUCKET" --key "telechargements/latest.json" >/dev/null 2>&1; then
   say "Aucune application Windows publiée : latest.json « non disponible » (évite le 404)"
   printf '{\n  "available": false\n}\n' | aws s3 cp - "s3://$BUCKET/telechargements/latest.json" --only-show-errors \
+    --content-type "application/json" --cache-control "$REVALIDATE_CACHE"
+fi
+# Même chose pour l'APK : sans version publiée, le téléphone affiche « bientôt disponible ».
+if ! aws s3api head-object --bucket "$BUCKET" --key "telechargements/android.json" >/dev/null 2>&1; then
+  say "Aucune application Android publiée : android.json « non disponible » (évite le 404)"
+  printf '{\n  "available": false\n}\n' | aws s3 cp - "s3://$BUCKET/telechargements/android.json" --only-show-errors \
     --content-type "application/json" --cache-control "$REVALIDATE_CACHE"
 fi
 
