@@ -41,12 +41,13 @@ The whole infrastructure is meant to be created and destroyed repeatedly to save
 - `assets/*`, `admin/assets/*`, `sprites/*`: managed `CachingOptimized` policy, objects uploaded with a one-year immutable `Cache-Control`.
 - Default behavior (HTML, `sw.js`, manifest, icons): managed `CachingDisabled` policy, objects uploaded with `no-cache`.
 - The player service worker must not handle `/admin` navigations: see `navigateFallbackDenylist` in `creatura-app/apps/player/vite.config.ts`.
+- `/telechargements/`: the Windows app (`Creatura-*.exe` + `latest.json`) and the Android app (`Creatura-*.apk` + `android.json`), read by the player home page (exe on computers, APK on phones). Binaries are uploaded before their manifest, so a manifest never points to a missing file. When a manifest is missing, the deploy scripts upload `{"available": false}` to avoid a 404 on every visit.
 
 ## Publishing the Web Apps
 
 `scripts/deploy-frontend.ps1` (Windows PowerShell 5.1 compatible) builds both apps from a sibling `creatura-app` folder, stages them in `.deploy/site`, uploads them with explicit content types, and invalidates CloudFront. `-StageOnly` stops before any AWS call.
 
-`scripts/deploy-frontend.sh` is the macOS / Linux twin (`--stage-only`, `--bucket`, `--distribution-id`, `--profile`). Keep both scripts in sync. Its `--mock` flag builds the apps with the in-browser simulated API, for when CloudFront has no `/api/*` route (variable `api_origin_domain_name` empty): a normal build served from the CDN then cannot reach a backend.
+`scripts/deploy-frontend.sh` is the macOS / Linux twin (`--stage-only`, `--bucket`, `--distribution-id`, `--profile`). Keep both scripts in sync. Both also build and publish the Windows app (Windows or Wine only; `--skip-desktop`, `--desktop-dir`) and the Android app (Java 21 and the Android SDK only; `--skip-mobile`, `--mobile-dir`); `deploy-aws.yml` passes the exe and APK artifacts of the app CI through `--desktop-dir` / `--mobile-dir`. Its `--mock` flag builds the apps with the in-browser simulated API, for when CloudFront has no `/api/*` route (variable `api_origin_domain_name` empty): a normal build served from the CDN then cannot reach a backend.
 
 ## One Command
 

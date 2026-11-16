@@ -7,8 +7,9 @@
 #   2. dépôts ECR + projet CodeBuild, puis en parallèle :
 #        images construites dans AWS (scripts/build-images.sh)
 #        cluster EKS, base RDS, ALB (eks/)
-#        CDN + publication du front et de l'application Windows (infra/, scripts/deploy-frontend.sh ;
-#        l'exe n'est construit que sous Windows ou avec Wine)
+#        CDN + publication du front et des applications Windows et Android (infra/,
+#        scripts/deploy-frontend.sh ; l'exe n'est construit que sous Windows ou avec Wine,
+#        l'APK qu'avec Java et le SDK Android)
 #   3. schéma de la base (Job k8s/db/schema-job.yaml), Secret et déploiement du back
 #   4. route /api/* de CloudFront vers l'ALB, puis contrôle de santé de bout en bout
 #

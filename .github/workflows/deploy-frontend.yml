@@ -294,3 +294,104 @@ jobs:
           test "$(jq -r '.version' <<< "$manifest")" = "$(jq -r '.version' apps/desktop/release/latest.json)"
           curl --fail --silent --show-error --head "${SITE_URL%/}/telechargements/${setup}" \
             | grep -iq "^content-type: application/vnd.microsoft.portable-executable"
+
+  # Android app (creatura-app/apps/mobile), built from the same commit as the published front.
+  # On phones, the home page offers it as soon as /telechargements/android.json describes a
+  # version. Signed with the ANDROID_* secrets when they exist, with a debug key otherwise.
+  # A failure here leaves the published site untouched.
+  mobile:
+    name: Publish Android app
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      BUCKET_NAME: ${{ needs.deploy.outputs.bucket_name }}
+      SITE_URL: ${{ needs.deploy.outputs.site_url }}
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: creatura-app
+
+    steps:
+      - name: Checkout app sources
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.APP_REPOSITORY }}
+          ref: ${{ needs.deploy.outputs.app_sha }}
+          token: ${{ secrets.APP_REPO_TOKEN }}
+          path: creatura-app
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: creatura-app/pnpm-lock.yaml
+
+      # Capacitor 8 needs Java 21; the Android SDK is preinstalled on the runner.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Signing key (optional)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret: the APK is signed with a debug key."
+            exit 0
+          fi
+          keystore="$RUNNER_TEMP/creatura.jks"
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          {
+            echo "ANDROID_KEYSTORE_FILE=$keystore"
+            echo "ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "ANDROID_KEY_ALIAS=$KEY_ALIAS"
+            echo "ANDROID_KEY_PASSWORD=${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
+          } >> "$GITHUB_ENV"
+
+      - name: Build the Android app
+        run: |
+          test -n "$SITE_URL"
+          # The APK opens the site itself (custom domain or CloudFront).
+          pnpm mobile --url "${SITE_URL%/}"
+          test -f apps/mobile/release/android.json
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Publish the Android app to S3
+        run: |
+          test -n "$BUCKET_NAME"
+          # The APK first: android.json must never point to a file that is not uploaded yet.
+          aws s3 cp apps/mobile/release "s3://${BUCKET_NAME}/telechargements/" --recursive \
+            --exclude "*" --include "Creatura-*.apk" \
+            --content-type "application/vnd.android.package-archive" \
+            --cache-control "no-cache"
+          aws s3 cp apps/mobile/release/android.json "s3://${BUCKET_NAME}/telechargements/android.json" \
+            --content-type "application/json" \
+            --cache-control "no-cache"
+
+      - name: Verify public download
+        run: |
+          manifest=$(curl --fail --silent --show-error "${SITE_URL%/}/telechargements/android.json")
+          echo "$manifest"
+          apk=$(jq -r '.apk.file' <<< "$manifest")
+          test "$(jq -r '.version' <<< "$manifest")" = "$(jq -r '.version' apps/mobile/release/android.json)"
+          curl --fail --silent --show-error --head "${SITE_URL%/}/telechargements/${apk}" \
+            | grep -iq "^content-type: application/vnd.android.package-archive"

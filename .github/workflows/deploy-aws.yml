@@ -148,6 +148,19 @@ jobs:
           merge-multiple: true
           path: .deploy/desktop
 
+      # Android app built by the app CI (job "mobile", optional there too): published next to the
+      # site under /telechargements/. Without it, the site is published and any APK online is kept.
+      - name: Download Android app (optional)
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          repository: creatura2026/creatura-app
+          run-id: ${{ env.APP_RUN_ID }}
+          github-token: ${{ secrets.APP_REPO_TOKEN }}
+          pattern: creatura-android-*
+          merge-multiple: true
+          path: .deploy/mobile
+
       - name: Verify exact frontend bytes and unpack
         run: |
           python scripts/ci/unpack-frontend.py \
