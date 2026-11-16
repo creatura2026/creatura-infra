@@ -71,14 +71,14 @@ La base est dans les sous-réseaux privés du cluster, sans adresse publique. So
 - **Depuis un poste, par le bastion SSM** (`bastion.tf`, désactivé par défaut ; `t3.micro`, couvert par l'offre gratuite AWS : 750 h/mois d'instance, 30 Go de disque, 750 h d'IPv4 publique) : dans `terraform.tfvars`, `create_bastion = true` et `bastion_tunnel_users = ["<utilisateur IAM>"]`, puis `terraform apply`. Le bastion est une instance `t3.micro` sans port ouvert ni clé SSH, dans un sous-réseau public (il marche aussi en pause, sans NAT) ; la base n'accepte que lui en plus des nœuds. Chaque utilisateur cité reçoit le seul droit d'ouvrir un tunnel vers ce bastion. Sur le poste (AWS CLI + `session-manager-plugin`), lancer la commande donnée par `terraform output -raw bastion_tunnel_command` (ajouter `--profile …` si besoin) : la base répond alors sur `localhost:15432`, `sslmode=require` (`verify-full` refuse `localhost`). Pas d'IP à autoriser : le tunnel passe par HTTPS. Retirer : `create_bastion = false`, puis `terraform apply`.
 - **Image du Job** : `ghcr.io/creatura2026/creatura-db:develop`, publiée par la CI de creatura-app. Si le package est privé, ajouter `imagePullSecrets` au Job comme au Deployment.
 
-Restauration : `db_snapshot_identifier` crée la base à partir d'un snapshot (sans effet sur une base existante) ; `scripts/aws-up.sh` y met automatiquement le dernier snapshot manuel `creatura-db-*`.
+Restauration : `db_snapshot_identifier` crée la base à partir d'un snapshot (sans effet sur une base existante) ; `scripts/aws-up.sh` et la CI (`scripts/ci/provision.sh`) y mettent automatiquement le dernier snapshot manuel `creatura-db-*` (`scripts/latest-db-snapshot.sh`) quand la base n'existe pas. Si la liste des snapshots ne peut pas être lue, ils s'arrêtent au lieu de créer une base vide.
 
 `rds.tf` reprend `infra/rds.tf` de la branche `AS-49-rds`. Ne pas fusionner les deux : la base serait créée deux fois.
 
 ### Sauvegardes et restauration
 
 - **Sauvegardes automatiques** : une par jour entre 01 h et 02 h UTC, conservées 7 jours (`db_backup_retention_days`), avec les journaux de transactions. On peut donc restaurer la base **à la seconde près** sur cette période. Le stockage est gratuit jusqu'à la taille de la base.
-- **Avant une destruction** : `scripts/aws-down.sh --snapshot` garde un snapshot manuel, qui survit à `aws-down.sh`. Sans cette option, la base et ses sauvegardes automatiques sont supprimées.
+- **À la destruction** : Terraform prend toujours un snapshot final `creatura-db-final-<horodatage>` (`skip_final_snapshot = false`), que ce soit par `scripts/aws-down.sh` ou par `terraform destroy`. Il survit à la stack et sera restauré à la recréation ; les sauvegardes automatiques, elles, sont supprimées avec la base. Si l'état a été appliqué avant ce réglage, `aws-down.sh` prend un snapshot manuel à la place. Supprimer les anciens snapshots avec `aws rds delete-db-snapshot`.
 - **Restaurer** : une restauration crée toujours une **nouvelle** base, la base d'origine n'est pas touchée. Procédure testée le 13/11/2026 (comptes, collection et 42 tests du schéma retrouvés sur la copie) :
 
 ```sh
@@ -116,7 +116,7 @@ Enregistrer la même valeur dans la variable GitHub `API_ORIGIN_DOMAIN_NAME` du 
 
 Limite connue : sans nom de domaine, pas de certificat pour l'ALB. Le navigateur parle toujours en HTTPS à CloudFront, mais le tronçon CloudFront → ALB est en HTTP. Aucun certificat ni domaine n'a été inventé ; avec un domaine, ajouter un certificat ACM et un écouteur 443.
 
-Destruction : vider d'abord `api_origin_domain_name` (apply de `infra/` sans la variable, et variable GitHub supprimée), puis détruire cette stack. Si quelqu'un a créé à la main un Service LoadBalancer ou un Ingress, le retirer avant. La base est supprimée avec la stack, sans snapshot final : ses données sont perdues. Ne pas détruire le bucket d'état avant les stacks qui l'utilisent.
+Destruction : vider d'abord `api_origin_domain_name` (apply de `infra/` sans la variable, et variable GitHub supprimée), puis détruire cette stack. Si quelqu'un a créé à la main un Service LoadBalancer ou un Ingress, le retirer avant. La base est supprimée avec la stack, après un snapshot final que `aws-up.sh` et la CI restaurent à la recréation. Ne pas détruire le bucket d'état avant les stacks qui l'utilisent.
 
 ## Contrat avec creatura-app
 

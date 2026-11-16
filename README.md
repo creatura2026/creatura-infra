@@ -68,18 +68,18 @@ python -m unittest discover -s tests -v
 find scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
 scripts/aws-up.sh                # crée ou complète tout l'environnement (20 à 25 min), ou reprend après une pause
 scripts/aws-pause.sh             # pause sans rien détruire : nœuds à 0, NAT supprimé, base arrêtée
-scripts/aws-down.sh --snapshot   # détruit tout, après un snapshot de la base
+scripts/aws-down.sh              # détruit tout ; la base est toujours gardée par un snapshot
 ```
 
 | État | Coût indicatif | Reprise |
 | --- | --- | --- |
 | En marche | environ 7 $ par jour | — |
 | En pause (`aws-pause.sh`) | environ 3 $ par jour (plan de contrôle EKS, ALB, stockage) | `aws-up.sh`, 5 à 10 min, données conservées |
-| Détruit (`aws-down.sh --snapshot`) | quelques centimes par mois (snapshot, zone DNS) | `aws-up.sh`, 20 à 25 min, base restaurée depuis le dernier snapshot |
+| Détruit (`aws-down.sh`) | quelques centimes par mois (snapshot, zone DNS) | `aws-up.sh`, 20 à 25 min, base restaurée depuis le dernier snapshot |
 
 À la création de la base, `aws-up.sh` restaure le dernier snapshot manuel `creatura-db-*` (`--fresh-db` pour une base neuve). La clé JWT et le mot de passe admin sont gardés dans `.deploy/backend-secrets.env` (ignoré par git, à ne pas perdre) : le compte admin d'une base restaurée garde ainsi son mot de passe.
 
-En pause, le front reste en ligne mais l'API répond 503. AWS redémarre seul une base arrêtée au bout de 7 jours : pour une longue interruption, préférer `aws-down.sh --snapshot`.
+En pause, le front reste en ligne mais l'API répond 503. AWS redémarre seul une base arrêtée au bout de 7 jours : pour une longue interruption, préférer `aws-down.sh`.
 
 `aws-up.sh` enchaîne : bucket d'état, images construites dans AWS (CodeBuild, sans Docker sur le poste), cluster et base, CDN et front, schéma de la base, déploiement du back, route `/api/*`, puis contrôle de santé. Il est ré-exécutable et affiche à la fin les adresses du site, de l'admin et de l'API. Prérequis : `aws`, `terraform`, `kubectl`, `python3`, `git`, `zip`, `pnpm`, et `eks/terraform.tfvars` (modèle : `eks/terraform.tfvars.example`).
 

@@ -15,7 +15,7 @@
 #
 # Ré-exécutable : chaque étape ne crée que ce qui manque.
 # Base : à sa création, elle est restaurée depuis le dernier snapshot manuel creatura-db-*
-# (fait par scripts/aws-down.sh --snapshot) ; --fresh-db pour partir d'une base neuve.
+# (pris à chaque scripts/aws-down.sh) ; --fresh-db pour partir d'une base neuve.
 # Clé JWT et mot de passe admin : gardés dans .deploy/backend-secrets.env (ignoré par git) et
 # réutilisés d'un lancement à l'autre, pour qu'une base restaurée garde son compte admin.
 # Durée : 20 à 25 minutes au premier lancement, surtout l'attente d'EKS et de RDS.
@@ -171,10 +171,10 @@ fi
 # Base à créer : restaurée depuis le dernier snapshot manuel, sauf --fresh-db.
 # (La variable n'a d'effet qu'à la création : sans risque pour une base existante.)
 if { [ -z "$DB" ] || [ "$DB" = "None" ]; } && [ "$FRESH_DB" = "no" ]; then
-  SNAPSHOT="$(aws rds describe-db-snapshots --region "$REGION" --snapshot-type manual \
-    --query 'sort_by(DBSnapshots[?starts_with(DBSnapshotIdentifier, `creatura-db-`) && Status==`available`], &SnapshotCreateTime)[-1].DBSnapshotIdentifier' \
-    --output text 2>/dev/null || true)"
-  if [ -n "$SNAPSHOT" ] && [ "$SNAPSHOT" != "None" ]; then
+  # Liste illisible : arrêt plutôt qu'une base vide, qui ferait perdre les comptes des joueurs.
+  SNAPSHOT="$(bash "$ROOT/scripts/latest-db-snapshot.sh" "$REGION")" \
+    || die "lecture des snapshots RDS impossible (droit rds:DescribeDBSnapshots ?) ; --fresh-db pour une base vide."
+  if [ -n "$SNAPSHOT" ]; then
     say "Base restaurée depuis le snapshot $SNAPSHOT (--fresh-db pour une base neuve)"
     EKS_VARS+=(-var "db_snapshot_identifier=$SNAPSHOT")
   else

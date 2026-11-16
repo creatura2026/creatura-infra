@@ -12,7 +12,7 @@
 # zone DNS) : environ 3 $ par jour, contre 7 en marche et presque rien après aws-down.sh.
 #
 # Limite AWS : une base arrêtée redémarre seule au bout de 7 jours. Au-delà d'une semaine de
-# pause, relancer ce script, ou préférer scripts/aws-down.sh --snapshot.
+# pause, relancer ce script, ou préférer scripts/aws-down.sh (base gardée par snapshot).
 #
 # Options : --profile NOM.
 set -euo pipefail
@@ -97,7 +97,7 @@ cat <<EOF
   Base        $(aws rds describe-db-instances --region "$REGION" --db-instance-identifier "$DB" --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "?") (redémarrage automatique par AWS vers le $restart)
   Coût        environ 3 \$ par jour (plan de contrôle EKS, ALB, stockage)
 
-  Reprendre : scripts/aws-up.sh        Tout détruire : scripts/aws-down.sh --snapshot
+  Reprendre : scripts/aws-up.sh        Tout détruire : scripts/aws-down.sh
 EOF
 exit
 }

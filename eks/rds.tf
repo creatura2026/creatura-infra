@@ -14,8 +14,9 @@
 # Mot de passe du compte principal : généré par RDS dans Secrets Manager, jamais
 # écrit dans le code ni dans l'état Terraform.
 #
-# Infra créée et détruite à la demande : ni protection contre la suppression,
-# ni snapshot final.
+# Infra créée et détruite à la demande : pas de protection contre la suppression,
+# mais toujours un snapshot final, que scripts/aws-up.sh et la CI restaurent à la
+# recréation. Sans lui, chaque destruction effaçait les comptes des joueurs.
 # =============================================================================
 
 variable "db_snapshot_identifier" {
@@ -148,6 +149,10 @@ resource "aws_db_parameter_group" "creatura" {
   }
 }
 
+# Horodatage fixé une fois pour toutes, qui rend unique le nom du snapshot final : la stack
+# entière, cette ressource comprise, est recréée après chaque destruction.
+resource "time_static" "db_final_snapshot" {}
+
 resource "aws_db_instance" "creatura" {
   identifier_prefix = "creatura-db-"
   engine            = "postgres"
@@ -182,9 +187,13 @@ resource "aws_db_instance" "creatura" {
   auto_minor_version_upgrade = true
   apply_immediately          = true
 
-  deletion_protection      = false
-  skip_final_snapshot      = true
-  delete_automated_backups = true
+  # Destruction (scripts/aws-down.sh ou terraform destroy) : snapshot final, qui survit à la
+  # stack et que scripts/latest-db-snapshot.sh retrouve (préfixe creatura-db-). Les sauvegardes
+  # automatiques, elles, partent avec la base.
+  deletion_protection       = false
+  skip_final_snapshot       = false
+  final_snapshot_identifier = "creatura-db-final-${formatdate("YYYYMMDD-hhmmss", time_static.db_final_snapshot.rfc3339)}"
+  delete_automated_backups  = true
 
   tags = local.db_tags
 

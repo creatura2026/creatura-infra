@@ -5,6 +5,11 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    # Déjà requis par le module EKS ; utilisé directement pour nommer le snapshot final (rds.tf).
+    time = {
+      source  = "hashicorp/time"
+      version = ">= 0.9.0"
+    }
   }
   backend "s3" {}
 }

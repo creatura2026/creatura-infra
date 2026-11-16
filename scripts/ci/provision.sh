@@ -43,7 +43,21 @@ else
     *) echo 'Set CUSTOM_DOMAIN to preserve the existing custom domain.' >&2; exit 1 ;;
   esac
 fi
-plan_and_apply eks
+# Database missing from the eks/ state (environment destroyed by scripts/aws-down.sh): restore
+# the latest creatura-db-* snapshot instead of creating an empty database, which would silently
+# lose every player account. Fails if the snapshots cannot be listed.
+eks_args=()
+terraform -chdir=eks show -json > .deploy/eks-state.json
+if ! jq -e '(.values.root_module.resources // []) | any(.address == "aws_db_instance.creatura")' .deploy/eks-state.json > /dev/null; then
+  snapshot=$(bash scripts/latest-db-snapshot.sh "$AWS_REGION")
+  if [ -n "$snapshot" ]; then
+    echo "RDS instance not in state: restoring snapshot $snapshot"
+    eks_args=("-var=db_snapshot_identifier=$snapshot")
+  else
+    echo "RDS instance not in state and no creatura-db-* snapshot: creating an empty database"
+  fi
+fi
+plan_and_apply eks "${eks_args[@]}"
 origin=$(terraform -chdir=eks output -raw api_origin_domain_name)
 # Preserve both DNS settings and the WAF settings introduced on develop.
 plan_and_apply infra \

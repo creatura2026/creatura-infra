@@ -17,6 +17,8 @@ if Path(sys.argv[0]).name == 'terraform':
     if 'show' in args:
         if stack == '-chdir=dns' and not any('ci.tfplan' in a for a in args):
             print(json.dumps({'values': {'root_module': {'resources': [{'address':'aws_route53_zone.site'}] if os.environ.get('MANAGED') == 'yes' else []}}}))
+        elif stack == '-chdir=eks' and not any('ci.tfplan' in a for a in args):
+            print(json.dumps({'values': {'root_module': {'resources': [{'address':'aws_db_instance.creatura'}] if os.environ.get('DB_IN_STATE', 'yes') == 'yes' else []}}}))
         else: print('{"resource_changes": []}')
     if 'output' in args:
         if '-json' in args:
@@ -25,6 +27,9 @@ if Path(sys.argv[0]).name == 'terraform':
         else: print({'domain_name':'game.example.com','zone_id':'ZEXAMPLE','certificate_arn':'arn:aws:acm:us-east-1:123456789012:certificate/test','api_origin_domain_name':'api.elb.amazonaws.com'}[args[-1]])
 if Path(sys.argv[0]).name == 'aws':
     if args[0] == 'route53': print(json.dumps({'HostedZones':[{'Name':'game.example.com.'}] if os.environ.get('EXISTING') == 'yes' else []}))
+    elif args[0] == 'rds':
+        if os.environ.get('SNAPSHOTS_UNREADABLE') == 'yes': sys.exit(254)
+        print(os.environ.get('SNAPSHOT', 'None'))
     else: print(os.environ.get('CERT_STATUS','ISSUED'))
 '''
 
@@ -37,6 +42,7 @@ class DNSProvisionTests(unittest.TestCase):
             (root/'bin').mkdir()
             (root/'scripts/ci').mkdir(parents=True)
             shutil.copy(ROOT/'scripts/ci/validate-dns.sh', root/'scripts/ci/validate-dns.sh')
+            shutil.copy(ROOT/'scripts/latest-db-snapshot.sh', root/'scripts/latest-db-snapshot.sh')
             for name in ['aws', 'terraform', 'sleep']:
                 p = root/'bin'/name
                 p.write_text('#!' + sys.executable + '\n' + MOCK)
@@ -74,3 +80,32 @@ class DNSProvisionTests(unittest.TestCase):
         result, calls = self.run_provision(CUSTOM_DOMAIN='', SITE='https://test.cloudfront.net/')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('-chdir=dns', calls)
+
+
+class DatabaseRestoreTests(unittest.TestCase):
+    """Base absente de l'état eks/ (environnement détruit) : restaurée, jamais recréée vide."""
+
+    run_provision = DNSProvisionTests.run_provision
+
+    def test_existing_database_left_alone(self):
+        result, calls = self.run_provision(MANAGED='yes')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('aws rds', calls)
+        self.assertNotIn('db_snapshot_identifier', calls)
+
+    def test_destroyed_database_restored_from_latest_snapshot(self):
+        result, calls = self.run_provision(MANAGED='yes', DB_IN_STATE='no', SNAPSHOT='creatura-db-final-20261116-093000')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        eks_plan = next(line for line in calls.splitlines() if line.startswith('terraform -chdir=eks plan'))
+        self.assertIn('-var=db_snapshot_identifier=creatura-db-final-20261116-093000', eks_plan)
+
+    def test_no_snapshot_creates_empty_database(self):
+        result, calls = self.run_provision(MANAGED='yes', DB_IN_STATE='no')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('-chdir=eks plan', calls)
+        self.assertNotIn('db_snapshot_identifier', calls)
+
+    def test_unreadable_snapshots_stop_before_eks(self):
+        result, calls = self.run_provision(MANAGED='yes', DB_IN_STATE='no', SNAPSHOTS_UNREADABLE='yes')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('-chdir=eks plan', calls)
