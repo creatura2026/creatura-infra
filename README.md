@@ -42,6 +42,7 @@ Configurer dans l'environnement `production`. Ne pas conserver d'anciennes valeu
 | `EKS_KUBERNETES_VERSION` | Version EKS en support standard disponible dans la région ; obligatoire |
 | `EKS_ADMIN_PRINCIPAL_ARN` | ARN IAM administrateur ; vide = identité IAM de la CI |
 | `EKS_ADMIN_CIDRS` | Tableau JSON des CIDR administrateur, ex. `["203.0.113.10/32"]` ; défaut `[]` |
+| `EKS_BASTION_USERS` | Tableau JSON des utilisateurs IAM autorisés à ouvrir le tunnel vers la base, ex. `["dbAccess"]` ; non vide = bastion SSM créé (`eks/bastion.tf`, ~3 $/mois), commande de tunnel dans le résumé du déploiement ; défaut `[]` |
 | `GHCR_USERNAME` | Compte GitHub qui peut lire les packages privés |
 
 | Secret | Usage |

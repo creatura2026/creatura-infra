@@ -19,6 +19,10 @@ ip = ipaddress.ip_address(os.environ['CI_RUNNER_IP'])
 if ip.version != 4:
     raise ValueError('Expected runner IPv4')
 cidrs = json.loads(os.environ['EKS_ADMIN_CIDRS'])
+# Bastion SSM facultatif (eks/bastion.tf) : créé dès qu'un utilisateur IAM est cité.
+bastion_users = json.loads(os.environ.get('EKS_BASTION_USERS') or '[]')
+if not isinstance(bastion_users, list) or not all(isinstance(u, str) and u for u in bastion_users):
+    raise ValueError('EKS_BASTION_USERS must be a JSON array of IAM user names')
 if not isinstance(cidrs, list):
     raise ValueError('EKS_ADMIN_CIDRS must be a JSON array')
 for cidr in cidrs:
@@ -33,6 +37,7 @@ values = dict(
     ci_administrator_principal_arn=os.environ['CI_PRINCIPAL'],
     endpoint_public_access_cidrs=sorted(set(cidrs + [str(ip) + '/32'])),
     create_ecr_repositories=False, create_image_builder=False,
+    create_bastion=bool(bastion_users), bastion_tunnel_users=bastion_users,
 )
 Path('eks/ci.auto.tfvars.json').write_text(json.dumps(values))
 PY

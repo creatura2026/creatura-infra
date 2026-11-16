@@ -48,6 +48,7 @@ jobs:
       EKS_KUBERNETES_VERSION: ${{ vars.EKS_KUBERNETES_VERSION }}
       EKS_ADMIN_PRINCIPAL_ARN: ${{ vars.EKS_ADMIN_PRINCIPAL_ARN }}
       EKS_ADMIN_CIDRS: ${{ vars.EKS_ADMIN_CIDRS || '[]' }}
+      EKS_BASTION_USERS: ${{ vars.EKS_BASTION_USERS || '[]' }}
       # Pare-feu WAF devant CloudFront (infra/waf.tf) : désactivé tant que la variable n'est pas à true.
       WAF_ENABLED: ${{ vars.WAF_ENABLED || 'false' }}
       WAF_MODE: ${{ vars.WAF_MODE || 'block' }}
@@ -253,3 +254,7 @@ jobs:
           echo "Infrastructure commit: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
           echo "App CI: https://github.com/creatura2026/creatura-app/actions/runs/$APP_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
           terraform -chdir=infra output -raw site_url >> "$GITHUB_STEP_SUMMARY"
+          tunnel=$(terraform -chdir=eks output -raw bastion_tunnel_command 2>/dev/null || true)
+          if [ -n "$tunnel" ] && [ "$tunnel" != "null" ]; then
+            printf '\n\nTunnel vers la base (bastion SSM) :\n\n```\n%s\n```\n' "$tunnel" >> "$GITHUB_STEP_SUMMARY"
+          fi

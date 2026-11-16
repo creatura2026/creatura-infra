@@ -8,3 +8,7 @@ endpoint_public_access_cidrs = ["203.0.113.10/32"] # Remplacer par l'IP de sorti
 # Images dans ECR, construites par CodeBuild (scripts/build-images.sh) : sans Docker local.
 create_ecr_repositories = true
 create_image_builder    = true
+
+# Bastion SSM pour accéder à la base depuis un poste (bastion.tf), environ 3 $/mois.
+# create_bastion       = true
+# bastion_tunnel_users = ["dbAccess"]
