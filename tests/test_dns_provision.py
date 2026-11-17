@@ -24,7 +24,14 @@ if Path(sys.argv[0]).name == 'terraform':
         if '-json' in args:
             if stack == '-chdir=dns': print('{"name_servers":{"value":["ns1.example.net"]},"certificate_arn":{"value":"arn:aws:acm:us-east-1:123456789012:certificate/test"}}')
             else: print(json.dumps({'site_url':{'value':os.environ.get('SITE', '')}}))
-        else: print({'domain_name':'game.example.com','zone_id':'ZEXAMPLE','certificate_arn':'arn:aws:acm:us-east-1:123456789012:certificate/test','api_origin_domain_name':'api.elb.amazonaws.com','bucket_arn':'arn:aws:s3:::creatura-assets-test','cloudfront_distribution_id':'E1234567890ABC'}[args[-1]])
+        else:
+            key = args[-1]
+            # First deployment simulated: infra/ exposes the sprite outputs only once it has been
+            # applied. Before that (first eks/ apply), the lookups fail as on a fresh environment.
+            infra_applied = '-chdir=infra apply' in Path(os.environ['CALLS']).read_text()
+            if key in ('bucket_arn', 'cloudfront_distribution_id') and os.environ.get('NO_INFRA_OUTPUTS') == 'yes' and not infra_applied:
+                sys.exit(1)
+            print({'domain_name':'game.example.com','zone_id':'ZEXAMPLE','certificate_arn':'arn:aws:acm:us-east-1:123456789012:certificate/test','api_origin_domain_name':'api.elb.amazonaws.com','bucket_arn':'arn:aws:s3:::creatura-assets-test','cloudfront_distribution_id':'E1234567890ABC'}[key])
 if Path(sys.argv[0]).name == 'aws':
     if args[0] == 'route53': print(json.dumps({'HostedZones':[{'Name':'game.example.com.'}] if os.environ.get('EXISTING') == 'yes' else []}))
     elif args[0] == 'rds':
@@ -110,3 +117,33 @@ class DatabaseRestoreTests(unittest.TestCase):
         result, calls = self.run_provision(MANAGED='yes', DB_IN_STATE='no', SNAPSHOTS_UNREADABLE='yes')
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn('-chdir=eks plan', calls)
+
+
+class SpritesPolicyTests(unittest.TestCase):
+    """Permissions S3/CloudFront du back (aws_iam_role_policy.backend_sprites, eks/rds.tf)."""
+
+    run_provision = DNSProvisionTests.run_provision
+
+    def test_arns_passed_once_when_infra_outputs_exist(self):
+        # Re-run habituel : les sorties d'infra/ existent déjà, un seul apply eks/ avec les ARN.
+        result, calls = self.run_provision(MANAGED='yes')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        eks_applies = [line for line in calls.splitlines() if line.startswith('terraform -chdir=eks apply')]
+        self.assertEqual(len(eks_applies), 1)
+        eks_plans = [line for line in calls.splitlines() if line.startswith('terraform -chdir=eks plan')]
+        self.assertEqual(len(eks_plans), 1)
+        self.assertIn('-var=sprites_bucket_arn=arn:aws:s3:::creatura-assets-test', eks_plans[0])
+        self.assertIn('distribution/E1234567890ABC', eks_plans[0])
+
+    def test_second_eks_apply_on_first_deployment(self):
+        # Premier déploiement : infra/ sans sorties → premier apply eks/ sans ARN, puis infra/,
+        # puis un second apply eks/ avec les ARN pour créer la politique.
+        result, calls = self.run_provision(MANAGED='yes', NO_INFRA_OUTPUTS='yes')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        eks_plans = [line for line in calls.splitlines() if line.startswith('terraform -chdir=eks plan')]
+        self.assertEqual(len(eks_plans), 2)
+        self.assertNotIn('sprites_bucket_arn', eks_plans[0])
+        self.assertIn('-var=sprites_bucket_arn=arn:aws:s3:::creatura-assets-test', eks_plans[1])
+        # Le second apply eks/ vient après l'apply infra/.
+        self.assertLess(calls.index('-chdir=infra apply'), calls.rindex('-chdir=eks plan'))
+
