@@ -59,11 +59,16 @@ locals {
   waf_block = var.waf_mode == "block"
 
   # Groupes de règles gérés par AWS (inclus dans le prix du WAF), par ordre d'évaluation.
+  # overrides : règles du groupe passées en « count » (observées, non bloquantes).
+  # AWSManagedRulesCommonRuleSet inspecte le corps de la requête et bloque dès 8 Ko
+  # (SizeRestrictions_BODY) : l'upload d'un sprite PNG par l'admin (PUT multipart, > 8 Ko)
+  # serait refusé par un 403. Le back valide déjà le type PNG et plafonne à 2 Mo, et l'accès
+  # S3 passe par le rôle IAM du pod (eks/rds.tf) : on observe ces règles sans bloquer.
   waf_managed_rules = [
-    { name = "AWSManagedRulesAmazonIpReputationList", metric = "ip-reputation" },
-    { name = "AWSManagedRulesCommonRuleSet", metric = "common" },
-    { name = "AWSManagedRulesKnownBadInputsRuleSet", metric = "known-bad-inputs" },
-    { name = "AWSManagedRulesSQLiRuleSet", metric = "sql-injection" },
+    { name = "AWSManagedRulesAmazonIpReputationList", metric = "ip-reputation", overrides = [] },
+    { name = "AWSManagedRulesCommonRuleSet", metric = "common", overrides = ["SizeRestrictions_BODY", "CrossSiteScripting_BODY"] },
+    { name = "AWSManagedRulesKnownBadInputsRuleSet", metric = "known-bad-inputs", overrides = [] },
+    { name = "AWSManagedRulesSQLiRuleSet", metric = "sql-injection", overrides = [] },
   ]
 }
 
@@ -149,6 +154,17 @@ resource "aws_wafv2_web_acl" "creatura" {
         managed_rule_group_statement {
           name        = rule.value.name
           vendor_name = "AWS"
+
+          # Règles du groupe passées en « count » : observées sans bloquer (upload de sprite).
+          dynamic "rule_action_override" {
+            for_each = rule.value.overrides
+            content {
+              name = rule_action_override.value
+              action_to_use {
+                count {}
+              }
+            }
+          }
         }
       }
 
