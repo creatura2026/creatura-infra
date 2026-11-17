@@ -7,6 +7,9 @@
     /            player PWA      (apps/player, base path /)
     /admin/      admin dashboard (apps/admin, built with base path /admin/)
     /sprites/    managed by Terraform, never touched by this script
+    /guides/     static HTML user guides from guides/ in this repository (optional: skipped
+                 if the folder does not exist). images/ subfolders are uploaded with a
+                 one-year immutable cache; HTML files with no-cache.
     /telechargements/  Windows app (apps/desktop): both exe files and latest.json, read by
                  the home page to offer the download. The exe calls the API of site_url
                  (simulated API with -Api mock).
@@ -367,9 +370,29 @@ if ($LASTEXITCODE -ne 0) {
     '--content-type', 'application/json', '--cache-control', 'no-cache')
   Remove-Item $placeholder
 }
+
+# --- 6. User guides ------------------------------------------------------------------
+
+$GuidesDir = Join-Path $RepoRoot 'guides'
+if (Test-Path $GuidesDir) {
+  Write-Host "==> Uploading guides to s3://$Bucket/guides/" -ForegroundColor Cyan
+  # Images first (immutable cache), HTML last (no-cache so updates are immediate).
+  Invoke-Native aws @('s3', 'cp', $GuidesDir, "s3://$Bucket/guides/", '--recursive', '--only-show-errors',
+    '--exclude', '*',
+    '--include', '*/images/*.png', '--include', '*/images/*.jpg', '--include', '*/images/*.jpeg',
+    '--include', '*/images/*.webp', '--include', '*/images/*.gif',
+    '--cache-control', $ImmutableCache)
+  Invoke-Native aws @('s3', 'cp', $GuidesDir, "s3://$Bucket/guides/", '--recursive', '--only-show-errors',
+    '--exclude', '*', '--include', '*.html',
+    '--cache-control', $RevalidateCache, '--content-type', 'text/html; charset=utf-8')
+  Write-Host "  uploaded guides"
+} else {
+  Write-Host "No guides/ folder found — skipping." -ForegroundColor Yellow
+}
+
 Write-Host "==> Invalidating CloudFront distribution $DistributionId" -ForegroundColor Cyan
 Invoke-Native aws @('cloudfront', 'create-invalidation', '--distribution-id', $DistributionId, '--paths', '/*', '--query', 'Invalidation.Id', '--output', 'text')
 
 $domain = & aws cloudfront get-distribution --id $DistributionId --query 'Distribution.DomainName' --output text
 Write-Host ''
-Write-Host "Done. Player: https://$domain/   Admin: https://$domain/admin/" -ForegroundColor Green
+Write-Host "Done. Player: https://$domain/   Admin: https://$domain/admin/   Guides: https://$domain/guides/" -ForegroundColor Green
