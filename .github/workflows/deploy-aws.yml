@@ -140,6 +140,7 @@ jobs:
       # Windows app built by the app CI (job "desktop", optional there too): published next to the
       # site under /telechargements/. Without it, the site is published and any exe online is kept.
       - name: Download Windows app (optional)
+        if: vars.SKIP_NATIVE_APPS != 'true'
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
@@ -153,6 +154,7 @@ jobs:
       # Android app built by the app CI (job "mobile", optional there too): published next to the
       # site under /telechargements/. Without it, the site is published and any APK online is kept.
       - name: Download Android app (optional)
+        if: vars.SKIP_NATIVE_APPS != 'true'
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
