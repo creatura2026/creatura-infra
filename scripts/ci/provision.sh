@@ -74,3 +74,13 @@ plan_and_apply infra \
   "-var=waf_enabled=${WAF_ENABLED:-false}" \
   "-var=waf_mode=${WAF_MODE:-block}" \
   "${dns_args[@]}"
+
+# Permissions S3/CloudFront du rôle Pod Identity du back (eks/rds.tf, aws_iam_role_policy
+# .backend_sprites) : les ARN viennent d'infra/, appliqué juste au-dessus. Second apply eks/
+# avec ces ARN pour que la politique existe avant le redémarrage du pod (deploy-release.sh).
+# CloudFront n'expose que l'ID : l'ARN se reconstruit (ressource globale, sans région).
+sprites_bucket_arn=$(terraform -chdir=infra output -raw bucket_arn)
+cloudfront_id=$(terraform -chdir=infra output -raw cloudfront_distribution_id)
+plan_and_apply eks "${eks_args[@]}" \
+  "-var=sprites_bucket_arn=$sprites_bucket_arn" \
+  "-var=cloudfront_distribution_arn=arn:aws:cloudfront::${AWS_ACCOUNT_ID}:distribution/${cloudfront_id}"

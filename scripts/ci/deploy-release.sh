@@ -72,7 +72,11 @@ data = json.loads(raw).get('data', {}) if raw.strip() else {}
 cdn = tf('infra', 'site_url').rstrip('/')
 values = dict(DATABASE_URL=tf('eks', 'backend_database_url'), DB_IAM_AUTH='true',
     AWS_REGION=__import__('os').environ['AWS_REGION'], TIMEZONE='Europe/Paris',
-    IMAGE_BASE_URL=cdn, CORS_ORIGINS=cdn)
+    IMAGE_BASE_URL=cdn, CORS_ORIGINS=cdn,
+    # Upload de sprites par l'admin (backend/app/controllers/admin.py) : bucket S3 et
+    # distribution CloudFront. Permissions portées par le rôle Pod Identity (eks/rds.tf).
+    SPRITES_BUCKET=tf('infra', 'bucket_name'),
+    CLOUDFRONT_DISTRIBUTION_ID=tf('infra', 'cloudfront_distribution_id'))
 if 'JWT_SECRET' not in data:
     values['JWT_SECRET'] = secrets.token_urlsafe(48)
 if not raw.strip():

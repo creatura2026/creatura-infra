@@ -24,7 +24,7 @@ if Path(sys.argv[0]).name == 'terraform':
         if '-json' in args:
             if stack == '-chdir=dns': print('{"name_servers":{"value":["ns1.example.net"]},"certificate_arn":{"value":"arn:aws:acm:us-east-1:123456789012:certificate/test"}}')
             else: print(json.dumps({'site_url':{'value':os.environ.get('SITE', '')}}))
-        else: print({'domain_name':'game.example.com','zone_id':'ZEXAMPLE','certificate_arn':'arn:aws:acm:us-east-1:123456789012:certificate/test','api_origin_domain_name':'api.elb.amazonaws.com'}[args[-1]])
+        else: print({'domain_name':'game.example.com','zone_id':'ZEXAMPLE','certificate_arn':'arn:aws:acm:us-east-1:123456789012:certificate/test','api_origin_domain_name':'api.elb.amazonaws.com','bucket_arn':'arn:aws:s3:::creatura-assets-test','cloudfront_distribution_id':'E1234567890ABC'}[args[-1]])
 if Path(sys.argv[0]).name == 'aws':
     if args[0] == 'route53': print(json.dumps({'HostedZones':[{'Name':'game.example.com.'}] if os.environ.get('EXISTING') == 'yes' else []}))
     elif args[0] == 'rds':
@@ -49,6 +49,7 @@ class DNSProvisionTests(unittest.TestCase):
                 p.chmod(0o755)
             env = {**os.environ, 'PATH':str(root/'bin')+os.pathsep+os.environ['PATH'],
                 'CALLS':str(root/'calls'), 'AWS_REGION':'eu-north-1', 'CUSTOM_DOMAIN':'game.example.com',
+                'AWS_ACCOUNT_ID':'123456789012',
                 'GITHUB_STEP_SUMMARY':str(root/'summary'), **settings}
             result = subprocess.run(['bash', str(ROOT/'scripts/ci/provision.sh')], cwd=root,
                 env=env, capture_output=True, text=True)
