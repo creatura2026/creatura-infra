@@ -91,7 +91,6 @@ plan_and_apply infra \
   "-var=api_origin_domain_name=$origin" \
   "-var=waf_enabled=${WAF_ENABLED:-false}" \
   "-var=waf_mode=${WAF_MODE:-block}" \
-  "-var=guides_admin_password=${GUIDES_ADMIN_PASSWORD}" \
   "${dns_args[@]}"
 
 # Premier déploiement seulement : les ARN n'existaient pas avant l'apply eks/ ci-dessus, mais

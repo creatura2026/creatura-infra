@@ -53,7 +53,6 @@ jobs:
       # Pare-feu WAF devant CloudFront (infra/waf.tf) : désactivé tant que la variable n'est pas à true.
       WAF_ENABLED: ${{ vars.WAF_ENABLED || 'false' }}
       WAF_MODE: ${{ vars.WAF_MODE || 'block' }}
-      GUIDES_ADMIN_PASSWORD: ${{ secrets.GUIDES_ADMIN_PASSWORD }}
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
       AWS_PAGER: ""

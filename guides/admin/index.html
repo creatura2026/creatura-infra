@@ -193,6 +193,20 @@
 </head>
 <body>
 
+<script>
+  (function () {
+    try {
+      var raw = localStorage.getItem('creatura.admin-session');
+      var session = raw ? JSON.parse(raw) : null;
+      if (!session || !session.accessToken) {
+        window.location.replace('/admin/');
+      }
+    } catch (e) {
+      window.location.replace('/admin/');
+    }
+  })();
+</script>
+
 <header>
   <div class="inner">
     <p class="brand">CREATURA <span class="badge-admin">Admin</span></p>

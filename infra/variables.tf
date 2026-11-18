@@ -54,9 +54,3 @@ variable "route53_zone_id" {
     error_message = "custom_domain, certificate_arn and route53_zone_id are set together (outputs of dns/), or all left empty."
   }
 }
-
-variable "guides_admin_password" {
-  description = "Password for Basic Auth on /guides/admin*. Username is 'admin'. Set via GUIDES_ADMIN_PASSWORD env var or TF_VAR_guides_admin_password."
-  type        = string
-  sensitive   = true
-}
