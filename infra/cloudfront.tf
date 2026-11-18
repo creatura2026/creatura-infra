@@ -15,7 +15,7 @@ locals {
 
   # Paths whose file names are content-hashed (or never change) and can be cached for a long time.
   # admin/assets/* is the dashboard, built with the /admin/ base path.
-  long_lived_path_patterns = ["assets/*", "admin/assets/*", "sprites/*"]
+  long_lived_path_patterns = ["assets/*", "admin/assets/*", "sprites/*", "guides/*/images/*"]
 }
 
 resource "aws_cloudfront_origin_access_control" "sprites" {
@@ -32,6 +32,16 @@ resource "aws_cloudfront_function" "spa_rewrite" {
   comment = "Serve index.html for client-side routes of the player PWA and the admin dashboard"
   publish = true
   code    = file("${path.module}/functions/spa-rewrite.js")
+}
+
+resource "aws_cloudfront_function" "guides_admin_auth" {
+  name    = "creatura-guides-admin-auth"
+  runtime = "cloudfront-js-2.0"
+  comment = "Basic Auth protection for the admin user guide"
+  publish = true
+  code = templatefile("${path.module}/functions/guides-admin-auth.js", {
+    credentials_b64 = base64encode("admin:${var.guides_admin_password}")
+  })
 }
 
 resource "aws_cloudfront_distribution" "sprites" {
@@ -83,6 +93,22 @@ resource "aws_cloudfront_distribution" "sprites" {
       compress                 = true
       cache_policy_id          = local.cache_policy_caching_disabled
       origin_request_policy_id = local.origin_request_policy_all_viewer_except_host
+    }
+  }
+
+  # Admin guide: Basic Auth required, no-cache so guide updates are visible immediately.
+  ordered_cache_behavior {
+    path_pattern           = "guides/admin*"
+    target_origin_id       = local.s3_origin_id
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD"]
+    cached_methods         = ["GET", "HEAD"]
+    compress               = true
+    cache_policy_id        = local.cache_policy_caching_disabled
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.guides_admin_auth.arn
     }
   }
 
