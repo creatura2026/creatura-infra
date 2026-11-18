@@ -15,7 +15,7 @@ locals {
 
   # Paths whose file names are content-hashed (or never change) and can be cached for a long time.
   # admin/assets/* is the dashboard, built with the /admin/ base path.
-  long_lived_path_patterns = ["assets/*", "admin/assets/*", "sprites/*", "guides/*/images/*"]
+  long_lived_path_patterns = ["assets/*", "admin/assets/*", "sprites/*"]
 }
 
 resource "aws_cloudfront_origin_access_control" "sprites" {

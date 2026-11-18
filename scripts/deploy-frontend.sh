@@ -5,9 +5,6 @@
 #   /            PWA joueur        (apps/player, base /)
 #   /admin/      dashboard admin   (apps/admin, construit avec la base /admin/)
 #   /sprites/    géré par Terraform, jamais touché par ce script
-#   /guides/     guides utilisateur HTML depuis le dossier guides/ de ce dépôt (optionnel :
-#                ignoré si le dossier n'existe pas). Les sous-dossiers images/ sont envoyés avec
-#                un cache d'un an ; les fichiers HTML avec no-cache.
 #   /telechargements/   application Windows (apps/desktop) : les deux exe et latest.json, que la
 #                page d'accueil lit pour proposer le téléchargement. L'exe appelle l'API de
 #                site_url. Construit sous Windows (Git Bash) ou avec Wine, sinon étape sautée.
@@ -309,30 +306,11 @@ if ! aws s3api head-object --bucket "$BUCKET" --key "telechargements/android.jso
     --content-type "application/json" --cache-control "$REVALIDATE_CACHE"
 fi
 
-# --- 6. Guides utilisateur -----------------------------------------------------------
-
-GUIDES_DIR="$ROOT/guides"
-if [ -d "$GUIDES_DIR" ]; then
-  say "Envoi des guides vers s3://$BUCKET/guides/"
-  # Images d'abord (cache immutable), HTML ensuite (no-cache pour refléter les mises à jour).
-  aws s3 cp "$GUIDES_DIR" "s3://$BUCKET/guides/" --recursive --only-show-errors \
-    --exclude "*" \
-    --include "*/images/*.png" --include "*/images/*.jpg" --include "*/images/*.jpeg" \
-    --include "*/images/*.webp" --include "*/images/*.gif" \
-    --cache-control "$IMMUTABLE_CACHE"
-  aws s3 cp "$GUIDES_DIR" "s3://$BUCKET/guides/" --recursive --only-show-errors \
-    --exclude "*" --include "*.html" \
-    --cache-control "$REVALIDATE_CACHE" --content-type "text/html; charset=utf-8"
-  echo "  envoyé : guides"
-else
-  printf '\nPas de dossier guides/ trouvé — étape ignorée.\n'
-fi
-
 say "Invalidation de la distribution CloudFront $DISTRIBUTION_ID"
 aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*" \
   --query "Invalidation.Id" --output text
 
 domain="$(aws cloudfront get-distribution --id "$DISTRIBUTION_ID" --query "Distribution.DomainName" --output text)"
-printf '\nTerminé. Joueur : https://%s/   Admin : https://%s/admin/   Guides : https://%s/guides/\n' "$domain" "$domain" "$domain"
+printf '\nTerminé. Joueur : https://%s/   Admin : https://%s/admin/\n' "$domain" "$domain"
 exit
 }

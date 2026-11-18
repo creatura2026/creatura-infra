@@ -11,11 +11,6 @@ function handler(event) {
     return request;
   }
 
-  // Static HTML guides: served as real files, no SPA rewrite needed.
-  if (uri === '/guides' || uri.indexOf('/guides/') === 0) {
-    return request;
-  }
-
   if (uri === '/admin' || uri.indexOf('/admin/') === 0) {
     request.uri = '/admin/index.html';
   } else {
