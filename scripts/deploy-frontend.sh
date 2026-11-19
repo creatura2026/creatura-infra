@@ -103,6 +103,7 @@ content_type() {
     woff) echo "font/woff" ;;
     woff2) echo "font/woff2" ;;
     ttf) echo "font/ttf" ;;
+    webm) echo "video/webm" ;;
     *) return 1 ;;
   esac
 }
